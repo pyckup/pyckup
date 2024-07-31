@@ -1,0 +1,7 @@
+- title: Name
+  description: Name of the user
+  format: String of name, including second names and surname if provided, without any other text surrounding it.
+- title: Age
+  description: Age of the user as a number (of years). No date, birthyear or other vague description.
+  format: Age as a single number.
+
