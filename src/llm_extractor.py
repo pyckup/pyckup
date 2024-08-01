@@ -5,6 +5,7 @@ from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.output_parsers.string import StrOutputParser
 from langchain_core.runnables import RunnableBranch
 from langchain_openai import ChatOpenAI
+from langchain_community.llms import Ollama
 import yaml
 from enum import Enum
 
@@ -13,8 +14,19 @@ HERE = Path(os.path.abspath(__file__)).parent
 
 
 class llm_extractor:
-    def __init__(self):
-        self.__llm = ChatOpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    def __init__(self, llm_provider="ollama"):
+        """Create LLM extractor object.
+
+        Args:
+            llm_provider (str, optional): Which LLM to use. Options: openai, ollama. Defaults to "ollama".
+        """
+        if llm_provider == "openai":
+            self.__llm = ChatOpenAI(api_key=os.environ["OPENAI_API_KEY"])
+        elif llm_provider == "ollama":
+            self.__llm = Ollama(model="gemma2:2b-instruct-q3_K_M")
+        else:
+            raise ValueError("Invalid LLM provider. Options: openai, llama.")
+        
         self.status = ExtractionStatus.IN_PROGRESS
         self.chat_history = []
 
@@ -46,14 +58,15 @@ class llm_extractor:
                     "system",
                     """Check if the required information is contained inside the user message. If so, 
             output the single word 'YES'. If not, output the single word 'NO'. If the user says in some way
-            that they don't want to provide the information, output 'ABORT'.""",
+            that they don't want to provide the information, output 'ABORT'. Don't ouput anything but
+            YES, NO or ABORT. If the user provides no message, output NO.""",
                 ),
                 ("system", "Required information: {current_information_description}"),
                 ("user", "{input}"),
             ]
         )
         verifyer_chain = verification_prompt | self.__llm | StrOutputParser()
-        data["verification_status"] = verifyer_chain.invoke(data)
+        data["verification_status"] = verifyer_chain.invoke(data).strip()
         return data
 
     def __filter_information(self, data):
@@ -65,9 +78,9 @@ class llm_extractor:
             [
                 (
                     "system",
-                    """You job is to filter out a certain piece of information from the user message. 
+                    """Your job is to filter out a certain piece of information from the user message. 
         You will be given the desciption of the information and the format in which the data should be returned.
-        Just output the filtered data without any extra text. If somehow the data is not contained in the message,
+        Just output the filtered data without any extra text. If the data is not contained in the message,
         output '##FAILED##""",
                 ),
                 (
@@ -79,7 +92,7 @@ class llm_extractor:
             ]
         )
         information_extractor = filter_prompt | self.__llm | StrOutputParser()
-        filtered_information = information_extractor.invoke(data)
+        filtered_information = information_extractor.invoke(data).strip()
 
         return filtered_information if filtered_information != "##FAILED##" else None
 
@@ -97,7 +110,7 @@ class llm_extractor:
                     If the user derivates from the topic of the information you want to have, gently guide 
                     them back to the topic.""",
                 ),
-                ("system", "Current information: {current_information_description}"),
+                ("system", "Information you want to have: {current_information_description}"),
                 MessagesPlaceholder(variable_name="chat_history"),
                 ("user", "{input}"),
             ]
@@ -156,7 +169,6 @@ class llm_extractor:
         Args:
             user_input (str): Most recent chat message from the user.
         """
-
         response = self.information_extraction_chain.invoke(
             {
                 "input": user_input,
