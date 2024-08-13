@@ -33,6 +33,7 @@ class softphone_call(pj.Call):
 class softphone:
     __pjsua_endpoint = None
     __pjsua_account = None
+    __sip_credentials = None
     active_call = None
     
     __tts_engine = None
@@ -46,7 +47,7 @@ class softphone:
         # Load SIP Credentials
         credentials_path = os.environ['SIP_CREDENTIALS_PATH']
         with open(credentials_path, 'r') as f:
-            sip_credentials = json.load(f)
+            self.__sip_credentials = json.load(f)
             
         # Initialize PJSUA2 endpoint
         ep_cfg = pj.EpConfig()
@@ -71,9 +72,9 @@ class softphone:
 
         # Create SIP Account
         acfg = pj.AccountConfig()
-        acfg.idUri = sip_credentials['idUri']
-        acfg.regConfig.registrarUri = sip_credentials['registrarUri']
-        cred = pj.AuthCredInfo("digest", "*", sip_credentials['username'], 0, sip_credentials['password'])
+        acfg.idUri = self.__sip_credentials['idUri']
+        acfg.regConfig.registrarUri = self.__sip_credentials['registrarUri']
+        cred = pj.AuthCredInfo("digest", "*", self.__sip_credentials['username'], 0, self.__sip_credentials['password'])
         acfg.sipConfig.authCreds.append(cred)
 
         self.__pjsua_account = pj.Account()
@@ -90,14 +91,18 @@ class softphone:
                     return True
         return False
     
-    def call(self, sip_number): 
+    def call(self, phone_number): 
         if self.active_call:
             print("Can't call: There is a call already in progress.")
         
+        # construct SIP adress
+        registrar = self.__sip_credentials['registrarUri'].split(':')[1]
+        sip_adress = "sip:" + phone_number + "@" + registrar
+        
+        # make call
         self.active_call = softphone_call(self.__pjsua_account, self)
-        print(self.active_call)
         call_op_param = pj.CallOpParam(True)
-        self.active_call.makeCall(sip_number, call_op_param)
+        self.active_call.makeCall(sip_adress, call_op_param)
     
     def wait_for_stop_calling(self):
         if not self.active_call:
@@ -181,9 +186,9 @@ class softphone:
             if call_info.media[i].type == pj.PJMEDIA_TYPE_AUDIO and call_info.media[i].status == pj.PJSUA_CALL_MEDIA_ACTIVE:
                 call_media = self.active_call.getAudioMedia(i)
                 
-                self.media_recorder = pj.AudioMediaRecorder()
-                self.media_recorder.createRecorder(str(HERE / "../artifacts/incoming.wav"))
-                call_media.startTransmit(self.media_recorder)
+                self.__media_recorder = pj.AudioMediaRecorder()
+                self.__media_recorder.createRecorder(str(HERE / "../artifacts/incoming.wav"))
+                call_media.startTransmit(self.__media_recorder)
                 time.sleep(duration)
-                call_media.stopTransmit(self.media_recorder)
-                del self.media_recorder
+                call_media.stopTransmit(self.__media_recorder)
+                del self.__media_recorder
