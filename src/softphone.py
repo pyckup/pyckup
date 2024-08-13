@@ -2,68 +2,45 @@ import json
 import os
 from pathlib import Path
 import time
+from openai import OpenAI
 import pjsua2 as pj
 import pyttsx3
+from pydub import AudioSegment
 
 HERE = Path(os.path.abspath(__file__)).parent
 
 class softphone_call(pj.Call):
-    tts_engine = None
-    media_player = None
-    media_recorder = None
+
     softphone = None
     
-    def __init__(self, acc, softphone):
-        self.media_player = None
-        self.media_recorder = None    
+    def __init__(self, acc, softphone):   
         self.softphone = softphone
         super(softphone_call, self).__init__(acc)
-        # self.tts_engine = pyttsx3.init()
 
-        
-    
     def onCallState(self, prm):
         call_info = self.getInfo()
         if call_info.state == pj.PJSIP_INV_STATE_DISCONNECTED:
             self.softphone.hangup()
-
         
+        super(softphone_call, self).onCallState(prm)
+        
+        
+    # def onCallMediaState(self, prm):
+    #     print("call media changed")
+    #     # return super().onCallMediaState(prm)
           
-                
-    # def say(self, message):
-    #     call_info = self.getInfo()
-    #     for i in range(len(call_info.media)):
-    #         if call_info.media[i].type == pj.PJMEDIA_TYPE_AUDIO and call_info.media[i].status == pj.PJSUA_CALL_MEDIA_ACTIVE:
-    #             call_media = self.getAudioMedia(i)
-
-    #             # Create WAV from message
-    #             self.tts_engine.save_to_file(message, str(HERE / '../artifacts/outgoing.wav'))
-    #             self.tts_engine.runAndWait()
-                
-    #             self.media_player = pj.AudioMediaPlayer()
-    #             self.media_player.createPlayer(str(HERE / "../artifacts/outgoing.wav"), pj.PJMEDIA_FILE_NO_LOOP)
-    #             self.media_player.startTransmit(call_media)
-                
-    #             return
-    #     print("No available audio media")
-                
-    # def recordAudio(self):
-    #     ci = self.getInfo()
-    #     for i in range(len(ci.media)):
-    #         if ci.media[i].type == pj.PJMEDIA_TYPE_AUDIO and self.getMedia(i) and ci.media[i].status == pj.PJSUA_CALL_MEDIA_ACTIVE:
-    #             self.media_recorder = pj.AudioMediaRecorder()
-    #             self.media_recorder.createRecorder(str(HERE / "../artifacts/recording.wav"))
-    #             print('recording audio')
-    #             self.getAudioMedia(i).startTransmit(self.media_recorder)
-    #             time.sleep(5)
-    #             self.getAudioMedia(i).stopTransmit(self.media_recorder)
-    #             self.media_recorder = None
-    #             print('saved recording to artifacts/recording.wav')
 
 class softphone:
-    pjsua_endpoint = None
-    pjsua_account = None
+    __pjsua_endpoint = None
+    __pjsua_account = None
     active_call = None
+    
+    __tts_engine = None
+    __media_player = None
+    __media_recorder = None
+    
+    __openai_client = None
+    
     
     def __init__(self):
         # Load SIP Credentials
@@ -73,20 +50,24 @@ class softphone:
             
         # Initialize PJSUA2 endpoint
         ep_cfg = pj.EpConfig()
-        ep_cfg.uaConfig.threadCnt = 2
+        ep_cfg.uaConfig.threadCnt = 1
         ep_cfg.logConfig.level = 1
         ep_cfg.logConfig.consoleLevel = 1
-        self.pjsua_endpoint = pj.Endpoint()
-        self.pjsua_endpoint.libCreate()
-        self.pjsua_endpoint.libInit(ep_cfg)
+        self.__pjsua_endpoint = pj.Endpoint()
+        self.__pjsua_endpoint.libCreate()
+        self.__pjsua_endpoint.libInit(ep_cfg)
 
         sipTpConfig = pj.TransportConfig()
-        sipTpConfig.port = 0#5060;
-        self.pjsua_endpoint.transportCreate(pj.PJSIP_TRANSPORT_UDP, sipTpConfig)
-        self.pjsua_endpoint.libStart()
+        sipTpConfig.port = 5061;
+        self.__pjsua_endpoint.transportCreate(pj.PJSIP_TRANSPORT_UDP, sipTpConfig)
+        self.__pjsua_endpoint.libStart()
         
+        # initialize media devices
         # WSL has no audio device, therefore use null device
-        self.pjsua_endpoint.audDevManager().setNullDev()
+        self.__pjsua_endpoint.audDevManager().setNullDev()
+        self.__tts_engine = pyttsx3.init()
+        self.__media_player = None
+        self.__media_recorder = None 
 
         # Create SIP Account
         acfg = pj.AccountConfig()
@@ -95,27 +76,38 @@ class softphone:
         cred = pj.AuthCredInfo("digest", "*", sip_credentials['username'], 0, sip_credentials['password'])
         acfg.sipConfig.authCreds.append(cred)
 
-        self.pjsua_account = pj.Account()
-        self.pjsua_account.create(acfg)
+        self.__pjsua_account = pj.Account()
+        self.__pjsua_account.create(acfg)
+        
+        # Initialize OpenAI
+        self.__openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
     
     def has_picked_up_call(self):
         if self.active_call:
             call_info = self.active_call.getInfo()
-            return call_info.state == pj.PJSIP_INV_STATE_CONFIRMED
+            for i in range(call_info.media.size()):
+                if (call_info.media[i].type==pj.PJMEDIA_TYPE_AUDIO and self.active_call.getMedia(i)):
+                    return True
         return False
     
     def call(self, sip_number): 
         if self.active_call:
             print("Can't call: There is a call already in progress.")
         
-        self.active_call = softphone_call(self.pjsua_account, self)
+        self.active_call = softphone_call(self.__pjsua_account, self)
+        print(self.active_call)
         call_op_param = pj.CallOpParam(True)
         self.active_call.makeCall(sip_number, call_op_param)
     
     def wait_for_stop_calling(self):
+        if not self.active_call:
+            return
+        
         call_info = self.active_call.getInfo()
-        while(self.active_call and call_info.state == pj.PJSIP_INV_STATE_CALLING):
+        while(call_info.state == pj.PJSIP_INV_STATE_CALLING or call_info.state == pj.PJSIP_INV_STATE_EARLY):
             time.sleep(0.2)
+            if not self.active_call:
+                return
             call_info = self.active_call.getInfo()
     
     def hangup(self):
@@ -126,3 +118,72 @@ class softphone:
         self.active_call.hangup(pj.CallOpParam(True))
         del self.active_call
         print('hung up')
+        
+    def say(self, message):
+        if not self.active_call:
+            print("Can't say: No call in progress.")
+            return
+                
+        call_info = self.active_call.getInfo()
+        for i in range(len(call_info.media)):
+            if call_info.media[i].type == pj.PJMEDIA_TYPE_AUDIO and call_info.media[i].status == pj.PJSUA_CALL_MEDIA_ACTIVE:
+                call_media = self.active_call.getAudioMedia(i)
+
+                # # Create WAV from message
+                # self.tts_engine = pyttsx3.init()
+                # self.tts_engine.save_to_file(message, str(HERE / '../artifacts/outgoing.wav'))
+                # self.tts_engine.runAndWait()
+                
+                response = self.__openai_client.audio.speech.create(
+                model="tts-1",
+                voice="alloy",
+                input=message,
+                response_format="wav",
+                )
+                response.stream_to_file(str(HERE / "../artifacts/outgoing.wav"))        
+                
+                self.__media_player = pj.AudioMediaPlayer()
+                self.__media_player.createPlayer(str(HERE / "../artifacts/outgoing.wav"), pj.PJMEDIA_FILE_NO_LOOP)
+                self.__media_player.startTransmit(call_media)
+                               
+                return
+        print("No available audio media")
+        
+    def listen(self):
+        # skip silence
+        self.__record_incoming_audio(0.1)
+        last_segment = AudioSegment.from_wav(str(HERE / "../artifacts/incoming.wav"))
+        while last_segment.dBFS < -50:
+            self.__record_incoming_audio(0.1)
+            last_segment = AudioSegment.from_wav(str(HERE / "../artifacts/incoming.wav"))
+            
+        # record audio while over silence threshold
+        combined_segments = last_segment
+        while last_segment.dBFS > -50:
+            self.__record_incoming_audio(1.0)
+            last_segment = AudioSegment.from_wav(str(HERE / "../artifacts/incoming.wav"))
+            combined_segments += last_segment
+        
+        # output combined audio to file
+        combined_segments.export(str(HERE / "../artifacts/incoming_combined.wav"), format="wav")
+        
+        # transcribe audio
+        audio_file = open(str(HERE / "../artifacts/incoming_combined.wav"), "rb")
+        transcription = self.__openai_client.audio.transcriptions.create(
+        model="whisper-1", 
+        file=audio_file
+        )
+        return transcription.text
+                
+    def __record_incoming_audio(self, duration = 1.0):
+        call_info = self.active_call.getInfo()
+        for i in range(len(call_info.media)):
+            if call_info.media[i].type == pj.PJMEDIA_TYPE_AUDIO and call_info.media[i].status == pj.PJSUA_CALL_MEDIA_ACTIVE:
+                call_media = self.active_call.getAudioMedia(i)
+                
+                self.media_recorder = pj.AudioMediaRecorder()
+                self.media_recorder.createRecorder(str(HERE / "../artifacts/incoming.wav"))
+                call_media.startTransmit(self.media_recorder)
+                time.sleep(duration)
+                call_media.stopTransmit(self.media_recorder)
+                del self.media_recorder

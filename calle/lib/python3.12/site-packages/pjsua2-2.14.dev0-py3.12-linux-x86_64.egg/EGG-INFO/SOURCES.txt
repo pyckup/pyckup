@@ -1,0 +1,7 @@
+pjsua2.py
+pjsua2_wrap.cpp
+setup.py
+pjsua2.egg-info/PKG-INFO
+pjsua2.egg-info/SOURCES.txt
+pjsua2.egg-info/dependency_links.txt
+pjsua2.egg-info/top_level.txt
