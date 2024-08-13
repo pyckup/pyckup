@@ -14,11 +14,12 @@ HERE = Path(os.path.abspath(__file__)).parent
 
 
 class llm_extractor:
-    def __init__(self, llm_provider="ollama"):
+    def __init__(self, information_config, llm_provider="openai"):
         """Create LLM extractor object.
 
         Args:
-            llm_provider (str, optional): Which LLM to use. Options: openai, ollama. Defaults to "ollama".
+            information_config (dict): Which informations are to be extracted.
+            llm_provider (str, optional): Which LLM to use. Options: openai, ollama. Defaults to "openai".
         """
         if llm_provider == "openai":
             self.__llm = ChatOpenAI(api_key=os.environ["OPENAI_API_KEY"])
@@ -30,8 +31,8 @@ class llm_extractor:
         self.status = ExtractionStatus.IN_PROGRESS
         self.chat_history = []
 
-        with open(HERE / "../conf/information.yaml", "r") as information_file:
-            self.__information_to_extract = yaml.safe_load(information_file)
+
+        self.__information_to_extract = information_config
         self.__current_information = self.__information_to_extract.pop(0)
         self.extracted_information = {}
 
@@ -186,6 +187,9 @@ class llm_extractor:
     
     def get_information(self):
         return self.extracted_information
+    
+    def get_status(self):
+        return self.status
 
 
 class ExtractionStatus(Enum):

@@ -4,7 +4,7 @@ from pathlib import Path
 import time
 from openai import OpenAI
 import pjsua2 as pj
-import pyttsx3
+# import pyttsx3
 from pydub import AudioSegment
 
 HERE = Path(os.path.abspath(__file__)).parent
@@ -23,11 +23,6 @@ class softphone_call(pj.Call):
             self.softphone.hangup()
         
         super(softphone_call, self).onCallState(prm)
-        
-        
-    # def onCallMediaState(self, prm):
-    #     print("call media changed")
-    #     # return super().onCallMediaState(prm)
           
 
 class softphone:
@@ -66,7 +61,7 @@ class softphone:
         # initialize media devices
         # WSL has no audio device, therefore use null device
         self.__pjsua_endpoint.audDevManager().setNullDev()
-        self.__tts_engine = pyttsx3.init()
+        # self.__tts_engine = pyttsx3.init()
         self.__media_player = None
         self.__media_recorder = None 
 
@@ -121,9 +116,8 @@ class softphone:
             return
 
         self.active_call.hangup(pj.CallOpParam(True))
-        del self.active_call
-        print('hung up')
-        
+        self.active_call = None
+                
     def say(self, message):
         if not self.active_call:
             print("Can't say: No call in progress.")
@@ -150,6 +144,10 @@ class softphone:
                 self.__media_player = pj.AudioMediaPlayer()
                 self.__media_player.createPlayer(str(HERE / "../artifacts/outgoing.wav"), pj.PJMEDIA_FILE_NO_LOOP)
                 self.__media_player.startTransmit(call_media)
+                
+                #wait for audio to finish playing
+                segment = AudioSegment.from_wav(str(HERE / "../artifacts/outgoing.wav"))
+                time.sleep(segment.duration_seconds)
                                
                 return
         print("No available audio media")
@@ -159,12 +157,20 @@ class softphone:
         self.__record_incoming_audio(0.1)
         last_segment = AudioSegment.from_wav(str(HERE / "../artifacts/incoming.wav"))
         while last_segment.dBFS < -50:
+            
+            if not self.active_call:
+                return ""
+            
             self.__record_incoming_audio(0.1)
             last_segment = AudioSegment.from_wav(str(HERE / "../artifacts/incoming.wav"))
             
         # record audio while over silence threshold
         combined_segments = last_segment
         while last_segment.dBFS > -50:
+            
+            if not self.active_call:
+                return ""
+            
             self.__record_incoming_audio(1.0)
             last_segment = AudioSegment.from_wav(str(HERE / "../artifacts/incoming.wav"))
             combined_segments += last_segment
