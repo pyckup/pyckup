@@ -1,11 +1,15 @@
 import json
 import os
 from pathlib import Path
+import threading
 import time
+import wave
 from openai import OpenAI
 import pjsua2 as pj
 # import pyttsx3
 from pydub import AudioSegment
+import numpy as np
+import yaml
 
 HERE = Path(os.path.abspath(__file__)).parent
 
@@ -26,19 +30,26 @@ class softphone_call(pj.Call):
           
 
 class softphone:
+    __config = None
+    
     __pjsua_endpoint = None
     __pjsua_account = None
     __sip_credentials = None
     active_call = None
     
     __tts_engine = None
-    __media_player = None
+    __media_player_1 = None
+    __media_player_2 = None
     __media_recorder = None
     
     __openai_client = None
     
     
     def __init__(self):
+        # Load config
+        with open(HERE / '../conf/softphone_config.yaml', 'r') as config_file:
+            self.__config = yaml.safe_load(config_file)
+        
         # Load SIP Credentials
         credentials_path = os.environ['SIP_CREDENTIALS_PATH']
         with open(credentials_path, 'r') as f:
@@ -62,7 +73,8 @@ class softphone:
         # WSL has no audio device, therefore use null device
         self.__pjsua_endpoint.audDevManager().setNullDev()
         # self.__tts_engine = pyttsx3.init()
-        self.__media_player = None
+        self.__media_player_1 = None
+        self.__media_player_2 = None
         self.__media_recorder = None 
 
         # Create SIP Account
@@ -118,7 +130,7 @@ class softphone:
         self.active_call.hangup(pj.CallOpParam(True))
         self.active_call = None
                 
-    def say(self, message):
+    def say(self, message):        
         if not self.active_call:
             print("Can't say: No call in progress.")
             return
@@ -127,51 +139,97 @@ class softphone:
         for i in range(len(call_info.media)):
             if call_info.media[i].type == pj.PJMEDIA_TYPE_AUDIO and call_info.media[i].status == pj.PJSUA_CALL_MEDIA_ACTIVE:
                 call_media = self.active_call.getAudioMedia(i)
-
-                # # Create WAV from message
-                # self.tts_engine = pyttsx3.init()
-                # self.tts_engine.save_to_file(message, str(HERE / '../artifacts/outgoing.wav'))
-                # self.tts_engine.runAndWait()
                 
-                response = self.__openai_client.audio.speech.create(
+                # -- Recieve TTS audio from OpenAI and stream it using double buffering --
+                # Setup buffer files
+                silence = np.zeros(1024, dtype=np.int16).tobytes()
+                with wave.open(str(HERE / "../artifacts/outgoing_buffer_0.wav"), 'wb') as buffer_0:
+                    buffer_0.setnchannels(self.__config['tts_channels']) 
+                    buffer_0.setsampwidth(self.__config['tts_sample_width'])  
+                    buffer_0.setframerate(self.__config['tts_sample_rate'])
+                    buffer_0.writeframes(silence)
+                
+                with wave.open(str(HERE / "../artifacts/outgoing_buffer_1.wav"), 'wb') as buffer_1:
+                    buffer_1.setnchannels(self.__config['tts_channels']) 
+                    buffer_1.setsampwidth(self.__config['tts_sample_width'])  
+                    buffer_1.setframerate(self.__config['tts_sample_rate'])
+                    buffer_1.writeframes(silence)
+                
+                # stream and play response to/from alternating buffer
+                delay = self.__config['tts_chunk_size'] / (self.__config['tts_sample_rate'] * self.__config['tts_sample_width'] * self.__config['tts_channels']) # length of each chunk in seconds
+
+                with self.__openai_client.audio.speech.with_streaming_response.create(
                 model="tts-1",
                 voice="alloy",
                 input=message,
-                response_format="wav",
-                )
-                response.stream_to_file(str(HERE / "../artifacts/outgoing.wav"))        
-                
-                self.__media_player = pj.AudioMediaPlayer()
-                self.__media_player.createPlayer(str(HERE / "../artifacts/outgoing.wav"), pj.PJMEDIA_FILE_NO_LOOP)
-                self.__media_player.startTransmit(call_media)
-                
-                #wait for audio to finish playing
-                segment = AudioSegment.from_wav(str(HERE / "../artifacts/outgoing.wav"))
-                time.sleep(segment.duration_seconds)
-                               
+                response_format="pcm",
+                ) as response:   
+                    buffer_switch = True
+                    for chunk in response.iter_bytes(chunk_size=self.__config['tts_chunk_size']):
+                        if chunk and len(chunk) >=512: 
+                            if buffer_switch:
+                                buffer_switch = False
+                                if self.__media_player_2:
+                                    self.__media_player_2.stopTransmit(call_media)
+                                self.__media_player_1 = pj.AudioMediaPlayer()  
+                                self.__media_player_1.createPlayer(str(HERE / "../artifacts/outgoing_buffer_0.wav"), pj.PJMEDIA_FILE_NO_LOOP)
+                                self.__media_player_1.startTransmit(call_media)
+
+                                with wave.open(str(HERE / "../artifacts/outgoing_buffer_1.wav"), 'wb') as buffer_1: 
+                                    buffer_1.setnchannels(self.__config['tts_channels']) 
+                                    buffer_1.setsampwidth(self.__config['tts_sample_width'])  
+                                    buffer_1.setframerate(self.__config['tts_sample_rate'])
+                                    buffer_1.writeframes(chunk)
+                                    time.sleep(delay)
+                            else:
+                                buffer_switch = True
+                                if self.__media_player_1:
+                                    self.__media_player_1.stopTransmit(call_media)
+                                self.__media_player_2 = pj.AudioMediaPlayer()  
+                                self.__media_player_2.createPlayer(str(HERE / "../artifacts/outgoing_buffer_1.wav"), pj.PJMEDIA_FILE_NO_LOOP)
+                                self.__media_player_2.startTransmit(call_media)
+                                with wave.open(str(HERE / "../artifacts/outgoing_buffer_0.wav"), 'wb') as buffer_0:
+                                    buffer_0.setnchannels(self.__config['tts_channels']) 
+                                    buffer_0.setsampwidth(self.__config['tts_sample_width'])  
+                                    buffer_0.setframerate(self.__config['tts_sample_rate'])
+                                    buffer_0.writeframes(chunk)
+                                    time.sleep(delay)
+                                    
+                    # play residue audio from last buffer                
+                    if buffer_switch:
+                        self.__media_player_2.stopTransmit(call_media)
+                        self.__media_player_1 = pj.AudioMediaPlayer()  
+                        self.__media_player_1.createPlayer(str(HERE / "../artifacts/outgoing_buffer_0.wav"), pj.PJMEDIA_FILE_NO_LOOP)
+                        self.__media_player_1.startTransmit(call_media)
+                    else:
+                        self.__media_player_1.stopTransmit(call_media)
+                        self.__media_player_2 = pj.AudioMediaPlayer()  
+                        self.__media_player_2.createPlayer(str(HERE / "../artifacts/outgoing_buffer_1.wav"), pj.PJMEDIA_FILE_NO_LOOP)
+                        self.__media_player_2.startTransmit(call_media)      
+                                   
                 return
         print("No available audio media")
         
     def listen(self):
         # skip silence
-        self.__record_incoming_audio(0.1)
+        self.__record_incoming_audio(self.__config['silence_sample_interval'])
         last_segment = AudioSegment.from_wav(str(HERE / "../artifacts/incoming.wav"))
-        while last_segment.dBFS < -50:
+        while last_segment.dBFS < self.__config['silence_threshold']:
             
             if not self.active_call:
                 return ""
             
-            self.__record_incoming_audio(0.1)
+            self.__record_incoming_audio(self.__config['silence_sample_interval'])
             last_segment = AudioSegment.from_wav(str(HERE / "../artifacts/incoming.wav"))
             
         # record audio while over silence threshold
         combined_segments = last_segment
-        while last_segment.dBFS > -50:
+        while last_segment.dBFS > self.__config['silence_threshold']:
             
             if not self.active_call:
                 return ""
             
-            self.__record_incoming_audio(1.0)
+            self.__record_incoming_audio(self.__config['speaking_sample_interval'])
             last_segment = AudioSegment.from_wav(str(HERE / "../artifacts/incoming.wav"))
             combined_segments += last_segment
         
