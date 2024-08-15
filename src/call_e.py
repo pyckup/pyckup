@@ -29,7 +29,6 @@ class call_e:
         ()
         
     # TODO: change to contact_id in db
-    # TODO: log export
     def call_contact(self, contact_number, enable_logging = True):
         conversation_log = ""
         

@@ -1,7 +1,22 @@
-- title: Name
-  description: Name of the user
-  format: String of name, including second names and surname if provided, without any other text surrounding it.
-- title: Age
-  description: Age of the user as a number (of years). No date, birthyear or other vague description.
-  format: Age as a single number.
+active_conversation:
+  - type: read
+    text: Hello, my name is call-e. I have called to ask you a few questions.
+  - type: information
+    title: Name
+    description: Name of the user
+    format: String of name, including second names and surname if provided, without any other text surrounding it.
+  - type: prompt
+    prompt: Say that the user has a very pretty name.
+  - type: information
+    title: Age
+    description: Age of the user as a number (of years). No date, birthyear or other vague description.
+    format: Age as a single number.
+  - type: read
+    text: Thank you for answering my questions. Yours call-e.
+aborted_conversation:
+  - type: prompt
+    prompt: Apologize to the user. Don't offer them any more assistance, they won't be able to communicate with you further.
+  - type: read
+    text: Thank you for your patience. Yours call-e.
+  
 

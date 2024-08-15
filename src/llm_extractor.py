@@ -14,7 +14,7 @@ HERE = Path(os.path.abspath(__file__)).parent
 
 
 class llm_extractor:
-    def __init__(self, information_config, llm_provider="openai"):
+    def __init__(self, conversation_config, llm_provider="openai"):
         """Create LLM extractor object.
 
         Args:
@@ -31,9 +31,9 @@ class llm_extractor:
         self.status = ExtractionStatus.IN_PROGRESS
         self.chat_history = []
 
-
-        self.__information_to_extract = information_config
-        self.__current_information = self.__information_to_extract.pop(0)
+        self.__conversation_config = conversation_config
+        self.__conversation_items = conversation_config['active_conversation']
+        self.__current_item = self.__conversation_items.pop(0)
         self.extracted_information = {}
 
         self.information_extraction_chain = self.__verify_information | RunnableBranch(
@@ -106,14 +106,12 @@ class llm_extractor:
                 (
                     "system",
                     """Have a casual conversation with the user. Over the course of the conversation you are
-                    supposed to extract different pieces of information from the user. Start by greeting them like you just called them.
-                    Be open that you are looking for some information and ask them if they can help you with that.
+                    supposed to extract different pieces of information from the user.
                     If the user derivates from the topic of the information you want to have, gently guide 
                     them back to the topic.""",
                 ),
                 ("system", "Information you want to have: {current_information_description}"),
                 MessagesPlaceholder(variable_name="chat_history"),
-                ("user", "{input}"),
             ]
         )
         information_extractor = extraction_prompt | self.__llm | StrOutputParser()
@@ -124,66 +122,90 @@ class llm_extractor:
         Store filtered extracted information and either continue with the next information or finish
         the process by thanking the user.
         """
-        self.extracted_information[self.__current_information["title"]] = (
+        self.extracted_information[self.__current_item["title"]] = (
             self.__filter_information(data)
         )
-
-        if len(self.__information_to_extract) == 0:
-            # done extracting
-            self.status = ExtractionStatus.COMPLETED
-            extraction_finished_prompt = ChatPromptTemplate.from_messages(
-                [
-                    (
-                        "system",
-                        """Thank the user shortly for providing the information and wish them a nice day. Don't 
-                offer them any more assistance, they won't be able to communicate with you further.""",
-                    ),
-                    MessagesPlaceholder(variable_name="chat_history"),
-                    ("user", "{input}"),
-                ]
-            )
-            return extraction_finished_prompt | self.__llm | StrOutputParser()
+        
+        if len(self.__conversation_items) > 0:
+            self.__current_item = self.__conversation_items.pop(0)
         else:
-            # continue with next information
-            self.__current_information = self.__information_to_extract.pop(0)
-            data["current_information_description"] = self.__current_information
-            return self.__make_information_extractor(data).invoke(data)
+            self.status = ExtractionStatus.COMPLETED
+            return ""
+         
+        return self.__process_conversation_items(data["input"], append_input=False)
 
     def __extraction_aborted(self, data):
         """
         End the process and return a subchain that apologizes to the user.
         """
         self.status = ExtractionStatus.ABORTED
-        extraction_aborted_prompt = ChatPromptTemplate.from_messages(
+        
+        self.__conversation_items = self.__conversation_config['aborted_conversation']
+        if len(self.__conversation_items) > 0:
+            self.__current_item = self.__conversation_items.pop(0)
+        else:
+            return ""
+        
+        return self.__process_conversation_items(data["input"], append_input=False, aborted=True)
+
+    def __execute_prompt(self, prompt):
+        prompt_template = ChatPromptTemplate.from_messages(
             [
-                ("system", """Apologize to the user and wish them a nice day. Don't 
-                offer them any more assistance, they won't be able to communicate with you further."""),
+                ("system", prompt),
                 MessagesPlaceholder(variable_name="chat_history"),
-                ("user", "{input}"),
             ]
         )
-        return extraction_aborted_prompt | self.__llm | StrOutputParser()
+        prompt_chain = prompt_template | self.__llm | StrOutputParser()
+        return prompt_chain.invoke({"chat_history": self.chat_history})
 
-    def run_extraction_step(self, user_input):
+    def __process_conversation_items(self, user_input, append_input=True, aborted=False):
         """Try to extract information from the user input and return a LLM reponse that can be output.
 
         Args:
             user_input (str): Most recent chat message from the user.
         """
+        if append_input:
+            self.chat_history.append(HumanMessage(content=user_input))
+        
+        collected_response = ""
+        
+        # sequentially process conversation items that don't require user interaction
+        while self.__current_item['type'] != "information":
+            if self.__current_item['type'] == "read":
+                response = self.__current_item['text'] + "\n"
+                collected_response += response
+                self.chat_history.append(AIMessage(content=response))
+            elif self.__current_item['type'] == "prompt":
+                response = self.__execute_prompt(self.__current_item['prompt']) + "\n"
+                collected_response += response
+                self.chat_history.append(AIMessage(content=response))
+            
+            if len(self.__conversation_items) > 0:
+                self.__current_item = self.__conversation_items.pop(0)
+            else:
+                if not aborted:
+                    self.status = ExtractionStatus.COMPLETED
+                return collected_response
+        
         response = self.information_extraction_chain.invoke(
             {
                 "input": user_input,
                 "chat_history": self.chat_history,
-                "current_information_description": self.__current_information[
+                "current_information_description": self.__current_item[
                     "description"
                 ],
-                "current_information_format": self.__current_information["format"],
+                "current_information_format": self.__current_item["format"],
             }
         )
-        self.chat_history.extend(
-            [HumanMessage(content=user_input), AIMessage(content=response)]
-        )
-        return response
+        
+        collected_response += response
+        self.chat_history.append(AIMessage(content=response))
+
+        return collected_response
+    
+    def run_extraction_step(self, user_input):
+        return self.__process_conversation_items(user_input, append_input=True, aborted=False)
+        
     
     def get_information(self):
         return self.extracted_information
