@@ -22,7 +22,7 @@ class llm_extractor:
             llm_provider (str, optional): Which LLM to use. Options: openai, ollama. Defaults to "openai".
         """
         if llm_provider == "openai":
-            self.__llm = ChatOpenAI(api_key=os.environ["OPENAI_API_KEY"])
+            self.__llm = ChatOpenAI(api_key=os.environ["OPENAI_API_KEY"], model="gpt-4o-mini")
         elif llm_provider == "ollama":
             self.__llm = Ollama(model="gemma2:2b-instruct-q3_K_M")
         else:
@@ -82,7 +82,7 @@ class llm_extractor:
                     """Your job is to filter out a certain piece of information from the user message. 
         You will be given the desciption of the information and the format in which the data should be returned.
         Just output the filtered data without any extra text. If the data is not contained in the message,
-        output '##FAILED##""",
+        output '##FAILED##'""",
                 ),
                 (
                     "system",
@@ -108,7 +108,7 @@ class llm_extractor:
                     """Have a casual conversation with the user. Over the course of the conversation you are
                     supposed to extract different pieces of information from the user.
                     If the user derivates from the topic of the information you want to have, gently guide 
-                    them back to the topic.""",
+                    them back to the topic. Be brief.""",
                 ),
                 ("system", "Information you want to have: {current_information_description}"),
                 MessagesPlaceholder(variable_name="chat_history"),

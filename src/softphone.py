@@ -89,6 +89,9 @@ class softphone:
         
         # Initialize OpenAI
         self.__openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+        
+    def __del__(self):
+        self.__pjsua_endpoint.libDestroy()
     
     def has_picked_up_call(self):
         if self.active_call:
@@ -142,70 +145,73 @@ class softphone:
                 
                 # -- Recieve TTS audio from OpenAI and stream it using double buffering --
                 # Setup buffer files
-                silence = np.zeros(1024, dtype=np.int16).tobytes()
-                with wave.open(str(HERE / "../artifacts/outgoing_buffer_0.wav"), 'wb') as buffer_0:
-                    buffer_0.setnchannels(self.__config['tts_channels']) 
-                    buffer_0.setsampwidth(self.__config['tts_sample_width'])  
-                    buffer_0.setframerate(self.__config['tts_sample_rate'])
-                    buffer_0.writeframes(silence)
-                
-                with wave.open(str(HERE / "../artifacts/outgoing_buffer_1.wav"), 'wb') as buffer_1:
-                    buffer_1.setnchannels(self.__config['tts_channels']) 
-                    buffer_1.setsampwidth(self.__config['tts_sample_width'])  
-                    buffer_1.setframerate(self.__config['tts_sample_rate'])
-                    buffer_1.writeframes(silence)
-                
-                # stream and play response to/from alternating buffer
-                delay = self.__config['tts_chunk_size'] / (self.__config['tts_sample_rate'] * self.__config['tts_sample_width'] * self.__config['tts_channels']) # length of each chunk in seconds
+                try:
+                    silence = np.zeros(1024, dtype=np.int16).tobytes()
+                    with wave.open(str(HERE / "../artifacts/outgoing_buffer_0.wav"), 'wb') as buffer_0:
+                        buffer_0.setnchannels(self.__config['tts_channels']) 
+                        buffer_0.setsampwidth(self.__config['tts_sample_width'])  
+                        buffer_0.setframerate(self.__config['tts_sample_rate'])
+                        buffer_0.writeframes(silence)
+                    
+                    with wave.open(str(HERE / "../artifacts/outgoing_buffer_1.wav"), 'wb') as buffer_1:
+                        buffer_1.setnchannels(self.__config['tts_channels']) 
+                        buffer_1.setsampwidth(self.__config['tts_sample_width'])  
+                        buffer_1.setframerate(self.__config['tts_sample_rate'])
+                        buffer_1.writeframes(silence)
+                    
+                    # stream and play response to/from alternating buffer
+                    delay = self.__config['tts_chunk_size'] / (self.__config['tts_sample_rate'] * self.__config['tts_sample_width'] * self.__config['tts_channels']) # length of each chunk in seconds
 
-                with self.__openai_client.audio.speech.with_streaming_response.create(
-                model="tts-1",
-                voice="alloy",
-                input=message,
-                response_format="pcm",
-                ) as response:   
-                    buffer_switch = True
-                    for chunk in response.iter_bytes(chunk_size=self.__config['tts_chunk_size']):
-                        if chunk and len(chunk) >=512: 
-                            if buffer_switch:
-                                buffer_switch = False
-                                if self.__media_player_2:
-                                    self.__media_player_2.stopTransmit(call_media)
-                                self.__media_player_1 = pj.AudioMediaPlayer()  
-                                self.__media_player_1.createPlayer(str(HERE / "../artifacts/outgoing_buffer_0.wav"), pj.PJMEDIA_FILE_NO_LOOP)
-                                self.__media_player_1.startTransmit(call_media)
+                    with self.__openai_client.audio.speech.with_streaming_response.create(
+                    model="tts-1",
+                    voice="alloy",
+                    input=message,
+                    response_format="pcm",
+                    ) as response:   
+                        buffer_switch = True
+                        for chunk in response.iter_bytes(chunk_size=self.__config['tts_chunk_size']):
+                            if chunk and len(chunk) >=512: 
+                                if buffer_switch:
+                                    buffer_switch = False
+                                    if self.__media_player_2:
+                                        self.__media_player_2.stopTransmit(call_media)
+                                    self.__media_player_1 = pj.AudioMediaPlayer()  
+                                    self.__media_player_1.createPlayer(str(HERE / "../artifacts/outgoing_buffer_0.wav"), pj.PJMEDIA_FILE_NO_LOOP)
+                                    self.__media_player_1.startTransmit(call_media)
 
-                                with wave.open(str(HERE / "../artifacts/outgoing_buffer_1.wav"), 'wb') as buffer_1: 
-                                    buffer_1.setnchannels(self.__config['tts_channels']) 
-                                    buffer_1.setsampwidth(self.__config['tts_sample_width'])  
-                                    buffer_1.setframerate(self.__config['tts_sample_rate'])
-                                    buffer_1.writeframes(chunk)
-                                    time.sleep(delay)
-                            else:
-                                buffer_switch = True
-                                if self.__media_player_1:
-                                    self.__media_player_1.stopTransmit(call_media)
-                                self.__media_player_2 = pj.AudioMediaPlayer()  
-                                self.__media_player_2.createPlayer(str(HERE / "../artifacts/outgoing_buffer_1.wav"), pj.PJMEDIA_FILE_NO_LOOP)
-                                self.__media_player_2.startTransmit(call_media)
-                                with wave.open(str(HERE / "../artifacts/outgoing_buffer_0.wav"), 'wb') as buffer_0:
-                                    buffer_0.setnchannels(self.__config['tts_channels']) 
-                                    buffer_0.setsampwidth(self.__config['tts_sample_width'])  
-                                    buffer_0.setframerate(self.__config['tts_sample_rate'])
-                                    buffer_0.writeframes(chunk)
-                                    time.sleep(delay)
-                                    
-                    # play residue audio from last buffer                
-                    if buffer_switch:
-                        self.__media_player_2.stopTransmit(call_media)
-                        self.__media_player_1 = pj.AudioMediaPlayer()  
-                        self.__media_player_1.createPlayer(str(HERE / "../artifacts/outgoing_buffer_0.wav"), pj.PJMEDIA_FILE_NO_LOOP)
-                        self.__media_player_1.startTransmit(call_media)
-                    else:
-                        self.__media_player_1.stopTransmit(call_media)
-                        self.__media_player_2 = pj.AudioMediaPlayer()  
-                        self.__media_player_2.createPlayer(str(HERE / "../artifacts/outgoing_buffer_1.wav"), pj.PJMEDIA_FILE_NO_LOOP)
-                        self.__media_player_2.startTransmit(call_media)      
+                                    with wave.open(str(HERE / "../artifacts/outgoing_buffer_1.wav"), 'wb') as buffer_1: 
+                                        buffer_1.setnchannels(self.__config['tts_channels']) 
+                                        buffer_1.setsampwidth(self.__config['tts_sample_width'])  
+                                        buffer_1.setframerate(self.__config['tts_sample_rate'])
+                                        buffer_1.writeframes(chunk)
+                                        time.sleep(delay)
+                                else:
+                                    buffer_switch = True
+                                    if self.__media_player_1:
+                                        self.__media_player_1.stopTransmit(call_media)
+                                    self.__media_player_2 = pj.AudioMediaPlayer()  
+                                    self.__media_player_2.createPlayer(str(HERE / "../artifacts/outgoing_buffer_1.wav"), pj.PJMEDIA_FILE_NO_LOOP)
+                                    self.__media_player_2.startTransmit(call_media)
+                                    with wave.open(str(HERE / "../artifacts/outgoing_buffer_0.wav"), 'wb') as buffer_0:
+                                        buffer_0.setnchannels(self.__config['tts_channels']) 
+                                        buffer_0.setsampwidth(self.__config['tts_sample_width'])  
+                                        buffer_0.setframerate(self.__config['tts_sample_rate'])
+                                        buffer_0.writeframes(chunk)
+                                        time.sleep(delay)
+                                        
+                        # play residue audio from last buffer                
+                        if buffer_switch:
+                            self.__media_player_2.stopTransmit(call_media)
+                            self.__media_player_1 = pj.AudioMediaPlayer()  
+                            self.__media_player_1.createPlayer(str(HERE / "../artifacts/outgoing_buffer_0.wav"), pj.PJMEDIA_FILE_NO_LOOP)
+                            self.__media_player_1.startTransmit(call_media)
+                        else:
+                            self.__media_player_1.stopTransmit(call_media)
+                            self.__media_player_2 = pj.AudioMediaPlayer()  
+                            self.__media_player_2.createPlayer(str(HERE / "../artifacts/outgoing_buffer_1.wav"), pj.PJMEDIA_FILE_NO_LOOP)
+                            self.__media_player_2.startTransmit(call_media)  
+                except:    
+                    print('Error occured while speaking (probably because user hung up)')
                                    
                 return
         print("No available audio media")
