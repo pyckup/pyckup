@@ -6,14 +6,14 @@ from langchain_core.output_parsers.string import StrOutputParser
 from langchain_core.runnables import RunnableBranch
 from langchain_openai import ChatOpenAI
 from langchain_community.llms import Ollama
-import yaml
 from enum import Enum
+import threading
 
 
 HERE = Path(os.path.abspath(__file__)).parent
 
 
-class llm_extractor:
+class llm_extractor:    
     def __init__(self, conversation_config, llm_provider="openai"):
         """Create LLM extractor object.
 
@@ -34,7 +34,8 @@ class llm_extractor:
         self.__conversation_config = conversation_config
         self.__conversation_items = conversation_config['active_conversation']
         self.__current_item = self.__conversation_items.pop(0)
-        self.extracted_information = {}
+        self.__extracted_information = {}
+        self.__information_lock = threading.Lock()
 
         self.information_extraction_chain = self.__verify_information | RunnableBranch(
             (
@@ -116,15 +117,23 @@ class llm_extractor:
         )
         information_extractor = extraction_prompt | self.__llm | StrOutputParser()
         return information_extractor
+    
+    def __append_filtered_info(self, data, title):
+        self.__information_lock.acquire()
+        self.__extracted_information[title] = (
+            self.__filter_information(data)
+        )
+        self.__information_lock.release()
 
     def __extraction_successful(self, data):
         """
         Store filtered extracted information and either continue with the next information or finish
         the process by thanking the user.
         """
-        self.extracted_information[self.__current_item["title"]] = (
-            self.__filter_information(data)
-        )
+        
+        
+        thread = threading.Thread(target=self.__append_filtered_info, args=(data, self.__current_item["title"]))
+        thread.start()
         
         if len(self.__conversation_items) > 0:
             self.__current_item = self.__conversation_items.pop(0)
@@ -169,8 +178,8 @@ class llm_extractor:
         
         collected_response = ""
         
-        # sequentially process conversation items that don't require user interaction
-        while self.__current_item['type'] != "information":
+        # sequentially process conversation items
+        while True:
             if self.__current_item['type'] == "read":
                 response = self.__current_item['text'] + "\n"
                 collected_response += response
@@ -179,28 +188,32 @@ class llm_extractor:
                 response = self.__execute_prompt(self.__current_item['prompt']) + "\n"
                 collected_response += response
                 self.chat_history.append(AIMessage(content=response))
+            elif self.__current_item['type'] == "information":
+                response = self.information_extraction_chain.invoke(
+                {
+                    "input": user_input,
+                    "chat_history": self.chat_history,
+                    "current_information_description": self.__current_item[
+                        "description"
+                    ],
+                    "current_information_format": self.__current_item["format"],
+                })
+                collected_response += response
+                self.chat_history.append(AIMessage(content=response))
+                break
             
             if len(self.__conversation_items) > 0:
-                self.__current_item = self.__conversation_items.pop(0)
+                # for interactive items, breakt the loop to get user input. Last item can`t be interactive.
+                if self.__current_item['interactive'] == True:
+                    self.__current_item = self.__conversation_items.pop(0)
+                    break
+                else:
+                    self.__current_item = self.__conversation_items.pop(0)
             else:
                 if not aborted:
                     self.status = ExtractionStatus.COMPLETED
                 return collected_response
-        
-        response = self.information_extraction_chain.invoke(
-            {
-                "input": user_input,
-                "chat_history": self.chat_history,
-                "current_information_description": self.__current_item[
-                    "description"
-                ],
-                "current_information_format": self.__current_item["format"],
-            }
-        )
-        
-        collected_response += response
-        self.chat_history.append(AIMessage(content=response))
-
+            
         return collected_response
     
     def run_extraction_step(self, user_input):
@@ -208,7 +221,9 @@ class llm_extractor:
         
     
     def get_information(self):
-        return self.extracted_information
+        self.__information_lock.acquire()
+        self.__information_lock.release()
+        return self.__extracted_information
     
     def get_status(self):
         return self.status

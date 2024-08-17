@@ -70,7 +70,6 @@ class softphone:
         self.__pjsua_endpoint.libStart()
         
         # initialize media devices
-        # WSL has no audio device, therefore use null device
         self.__pjsua_endpoint.audDevManager().setNullDev()
         # self.__tts_engine = pyttsx3.init()
         self.__media_player_1 = None
@@ -91,6 +90,10 @@ class softphone:
         self.__openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
         
     def __del__(self):
+        self.__media_player_1 = None
+        self.__media_player_2 = None
+        self.__media_recorder = None
+        self.__pjsua_account.shutdown()
         self.__pjsua_endpoint.libDestroy()
     
     def has_picked_up_call(self):
@@ -218,14 +221,17 @@ class softphone:
         
     def listen(self):
         # skip silence
-        self.__record_incoming_audio(self.__config['silence_sample_interval'])
+        if not self.__record_incoming_audio(self.__config['silence_sample_interval']):
+            return ""
+        
         last_segment = AudioSegment.from_wav(str(HERE / "../artifacts/incoming.wav"))
         while last_segment.dBFS < self.__config['silence_threshold']:
             
             if not self.active_call:
                 return ""
             
-            self.__record_incoming_audio(self.__config['silence_sample_interval'])
+            if not self.__record_incoming_audio(self.__config['silence_sample_interval']):
+                return ""
             last_segment = AudioSegment.from_wav(str(HERE / "../artifacts/incoming.wav"))
             
         # record audio while over silence threshold
@@ -235,7 +241,8 @@ class softphone:
             if not self.active_call:
                 return ""
             
-            self.__record_incoming_audio(self.__config['speaking_sample_interval'])
+            if not self.__record_incoming_audio(self.__config['speaking_sample_interval']):
+                return ""
             last_segment = AudioSegment.from_wav(str(HERE / "../artifacts/incoming.wav"))
             combined_segments += last_segment
         
@@ -260,5 +267,11 @@ class softphone:
                 self.__media_recorder.createRecorder(str(HERE / "../artifacts/incoming.wav"))
                 call_media.startTransmit(self.__media_recorder)
                 time.sleep(duration)
+                
+                if not self.__media_recorder or not self.active_call:
+                    return False
+                
                 call_media.stopTransmit(self.__media_recorder)
                 del self.__media_recorder
+                
+        return True

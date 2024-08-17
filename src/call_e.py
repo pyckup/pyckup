@@ -196,7 +196,7 @@ class call_e:
         # save log file
         if enable_logging:
             os.makedirs(HERE / "../logs", exist_ok=True)
-            with open(HERE / f"../logs/{contact_id}.log", "w") as log_file:
+            with open(HERE / f"../logs/{self.conversation_title}_{contact_id}.log", "w") as log_file:
                 log_file.write(conversation_log)
     
     def call_contacts(self, contact_ids = None, maximum_attempts = None):
