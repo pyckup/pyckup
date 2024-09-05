@@ -1,3 +1,4 @@
+import copy
 import os
 from pathlib import Path
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -31,8 +32,8 @@ class llm_extractor:
         self.status = ExtractionStatus.IN_PROGRESS
         self.chat_history = []
 
-        self.__conversation_config = conversation_config
-        self.__conversation_items = conversation_config['active_conversation']
+        self.__conversation_config = copy.deepcopy(conversation_config)
+        self.__conversation_items = self.__conversation_config['active_conversation']
         self.__current_item = self.__conversation_items.pop(0)
         self.__extracted_information = {}
         self.__information_lock = threading.Lock()
@@ -109,7 +110,7 @@ class llm_extractor:
                     """Have a casual conversation with the user. Over the course of the conversation you are
                     supposed to extract different pieces of information from the user.
                     If the user derivates from the topic of the information you want to have, gently guide 
-                    them back to the topic. Be brief.""",
+                    them back to the topic. Be brief. Use the language in which the required information is given.""",
                 ),
                 ("system", "Information you want to have: {current_information_description}"),
                 MessagesPlaceholder(variable_name="chat_history"),

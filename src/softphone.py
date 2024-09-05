@@ -218,6 +218,26 @@ class softphone:
                                    
                 return
         print("No available audio media")
+
+    def play_audio(self, audio_file_path, do_loop = False):
+        if not self.active_call:
+            print("Can't play audio: No call in progress.")
+            return
+        
+        call_info = self.active_call.getInfo()
+        for i in range(len(call_info.media)):
+            if call_info.media[i].type == pj.PJMEDIA_TYPE_AUDIO and call_info.media[i].status == pj.PJSUA_CALL_MEDIA_ACTIVE:
+                call_media = self.active_call.getAudioMedia(i)
+                
+            if self.__media_player_1:
+                self.__media_player_1.stopTransmit(call_media)
+            if self.__media_player_2:
+                self.__media_player_2.stopTransmit(call_media)
+                
+            self.__media_player_1 = pj.AudioMediaPlayer()  
+            loop_mode = pj.PJMEDIA_FILE_LOOP if do_loop else pj.PJMEDIA_FILE_NO_LOOP
+            self.__media_player_1.createPlayer(str(HERE / f"../{audio_file_path}"), loop_mode)
+            self.__media_player_1.startTransmit(call_media)
         
     def listen(self):
         # skip silence

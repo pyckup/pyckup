@@ -156,6 +156,7 @@ class call_e:
         
         while(extractor.get_status() == ExtractionStatus.IN_PROGRESS and sf.has_picked_up_call()):
             user_input = sf.listen()
+            sf.play_audio("resources/processing.wav")
             conversation_log += "User: " + user_input + "\n"
             extractor_response = extractor.run_extraction_step(user_input)
             conversation_log += "Call-E: " + extractor_response + "\n"
