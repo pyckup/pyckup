@@ -10,6 +10,7 @@ import pjsua2 as pj
 from pydub import AudioSegment
 import numpy as np
 import yaml
+import uuid
 
 HERE = Path(os.path.abspath(__file__)).parent
 
@@ -17,24 +18,51 @@ class softphone_call(pj.Call):
 
     softphone = None
     
-    def __init__(self, acc, softphone):   
+    def __init__(self, acc, softphone, call_id = pj.PJSUA_INVALID_ID):   
+        super(softphone_call, self).__init__(acc, call_id)
         self.softphone = softphone
-        super(softphone_call, self).__init__(acc)
+
 
     def onCallState(self, prm):
+        if not self.softphone:
+            return
+        
         call_info = self.getInfo()
         if call_info.state == pj.PJSIP_INV_STATE_DISCONNECTED:
             self.softphone.hangup()
         
         super(softphone_call, self).onCallState(prm)
+        
+class group_account(pj.Account):
+    def __init__(self, group):
+        self.__group = group
+        super(group_account, self).__init__()
+
+        
+    def onIncomingCall(self, prm):
+        for phone in self.__group.softphones:
+            if phone.active_call:
+                continue
+            
+            call = softphone_call(self, phone, prm.callId)
+            
+            call_op_param = pj.CallOpParam()
+            call_op_param.statusCode = pj.PJSIP_SC_OK
+            call.answer(call_op_param)
+            phone.active_call = call
+            return
+                    
+        # no available phone found
+        call = softphone_call(self, None, prm.callId)
+        call_op_param = pj.CallOpParam(True)
+        call.hangup(call_op_param)
           
 
 class softphone:
     __config = None
+    __id = None
     
-    __pjsua_endpoint = None
-    __pjsua_account = None
-    __sip_credentials = None
+    __group = None
     active_call = None
     
     __tts_engine = None
@@ -45,46 +73,23 @@ class softphone:
     __openai_client = None
     
     
-    def __init__(self):
+    def __init__(self, credentials_path, group = None):
         # Load config
         with open(HERE / '../conf/softphone_config.yaml', 'r') as config_file:
             self.__config = yaml.safe_load(config_file)
         
-        # Load SIP Credentials
-        credentials_path = os.environ['SIP_CREDENTIALS_PATH']
-        with open(credentials_path, 'r') as f:
-            self.__sip_credentials = json.load(f)
-            
-        # Initialize PJSUA2 endpoint
-        ep_cfg = pj.EpConfig()
-        ep_cfg.uaConfig.threadCnt = 1
-        ep_cfg.logConfig.level = 1
-        ep_cfg.logConfig.consoleLevel = 1
-        self.__pjsua_endpoint = pj.Endpoint()
-        self.__pjsua_endpoint.libCreate()
-        self.__pjsua_endpoint.libInit(ep_cfg)
-
-        sipTpConfig = pj.TransportConfig()
-        sipTpConfig.port = 5061;
-        self.__pjsua_endpoint.transportCreate(pj.PJSIP_TRANSPORT_UDP, sipTpConfig)
-        self.__pjsua_endpoint.libStart()
+        if group:
+            self.__group = group
+        else:
+            self.__group = softphone_group(credentials_path)
+        self.__group.add_phone(self)
         
-        # initialize media devices
-        self.__pjsua_endpoint.audDevManager().setNullDev()
+        self.__id = uuid.uuid4()
+        
         # self.__tts_engine = pyttsx3.init()
         self.__media_player_1 = None
         self.__media_player_2 = None
-        self.__media_recorder = None 
-
-        # Create SIP Account
-        acfg = pj.AccountConfig()
-        acfg.idUri = self.__sip_credentials['idUri']
-        acfg.regConfig.registrarUri = self.__sip_credentials['registrarUri']
-        cred = pj.AuthCredInfo("digest", "*", self.__sip_credentials['username'], 0, self.__sip_credentials['password'])
-        acfg.sipConfig.authCreds.append(cred)
-
-        self.__pjsua_account = pj.Account()
-        self.__pjsua_account.create(acfg)
+        self.__media_recorder = None
         
         # Initialize OpenAI
         self.__openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
@@ -93,8 +98,7 @@ class softphone:
         self.__media_player_1 = None
         self.__media_player_2 = None
         self.__media_recorder = None
-        self.__pjsua_account.shutdown()
-        self.__pjsua_endpoint.libDestroy()
+        self.__group.remove_phone(self)
     
     def has_picked_up_call(self):
         if self.active_call:
@@ -109,11 +113,11 @@ class softphone:
             print("Can't call: There is a call already in progress.")
         
         # construct SIP adress
-        registrar = self.__sip_credentials['registrarUri'].split(':')[1]
+        registrar = self.__group.sip_credentials['registrarUri'].split(':')[1]
         sip_adress = "sip:" + phone_number + "@" + registrar
         
         # make call
-        self.active_call = softphone_call(self.__pjsua_account, self)
+        self.active_call = softphone_call(self.__group.pjsua_account, self)
         call_op_param = pj.CallOpParam(True)
         self.active_call.makeCall(sip_adress, call_op_param)
     
@@ -150,13 +154,13 @@ class softphone:
                 # Setup buffer files
                 try:
                     silence = np.zeros(1024, dtype=np.int16).tobytes()
-                    with wave.open(str(HERE / "../artifacts/outgoing_buffer_0.wav"), 'wb') as buffer_0:
+                    with wave.open(str(HERE / f"../artifacts/{self.__id}_outgoing_buffer_0.wav"), 'wb') as buffer_0:
                         buffer_0.setnchannels(self.__config['tts_channels']) 
                         buffer_0.setsampwidth(self.__config['tts_sample_width'])  
                         buffer_0.setframerate(self.__config['tts_sample_rate'])
                         buffer_0.writeframes(silence)
                     
-                    with wave.open(str(HERE / "../artifacts/outgoing_buffer_1.wav"), 'wb') as buffer_1:
+                    with wave.open(str(HERE / f"../artifacts/{self.__id}_outgoing_buffer_1.wav"), 'wb') as buffer_1:
                         buffer_1.setnchannels(self.__config['tts_channels']) 
                         buffer_1.setsampwidth(self.__config['tts_sample_width'])  
                         buffer_1.setframerate(self.__config['tts_sample_rate'])
@@ -179,10 +183,10 @@ class softphone:
                                     if self.__media_player_2:
                                         self.__media_player_2.stopTransmit(call_media)
                                     self.__media_player_1 = pj.AudioMediaPlayer()  
-                                    self.__media_player_1.createPlayer(str(HERE / "../artifacts/outgoing_buffer_0.wav"), pj.PJMEDIA_FILE_NO_LOOP)
+                                    self.__media_player_1.createPlayer(str(HERE / f"../artifacts/{self.__id}_outgoing_buffer_0.wav"), pj.PJMEDIA_FILE_NO_LOOP)
                                     self.__media_player_1.startTransmit(call_media)
 
-                                    with wave.open(str(HERE / "../artifacts/outgoing_buffer_1.wav"), 'wb') as buffer_1: 
+                                    with wave.open(str(HERE / f"../artifacts/{self.__id}_outgoing_buffer_1.wav"), 'wb') as buffer_1: 
                                         buffer_1.setnchannels(self.__config['tts_channels']) 
                                         buffer_1.setsampwidth(self.__config['tts_sample_width'])  
                                         buffer_1.setframerate(self.__config['tts_sample_rate'])
@@ -193,9 +197,9 @@ class softphone:
                                     if self.__media_player_1:
                                         self.__media_player_1.stopTransmit(call_media)
                                     self.__media_player_2 = pj.AudioMediaPlayer()  
-                                    self.__media_player_2.createPlayer(str(HERE / "../artifacts/outgoing_buffer_1.wav"), pj.PJMEDIA_FILE_NO_LOOP)
+                                    self.__media_player_2.createPlayer(str(HERE / f"../artifacts/{self.__id}_outgoing_buffer_1.wav"), pj.PJMEDIA_FILE_NO_LOOP)
                                     self.__media_player_2.startTransmit(call_media)
-                                    with wave.open(str(HERE / "../artifacts/outgoing_buffer_0.wav"), 'wb') as buffer_0:
+                                    with wave.open(str(HERE / f"../artifacts/{self.__id}_outgoing_buffer_0.wav"), 'wb') as buffer_0:
                                         buffer_0.setnchannels(self.__config['tts_channels']) 
                                         buffer_0.setsampwidth(self.__config['tts_sample_width'])  
                                         buffer_0.setframerate(self.__config['tts_sample_rate'])
@@ -206,12 +210,12 @@ class softphone:
                         if buffer_switch:
                             self.__media_player_2.stopTransmit(call_media)
                             self.__media_player_1 = pj.AudioMediaPlayer()  
-                            self.__media_player_1.createPlayer(str(HERE / "../artifacts/outgoing_buffer_0.wav"), pj.PJMEDIA_FILE_NO_LOOP)
+                            self.__media_player_1.createPlayer(str(HERE / f"../artifacts/{self.__id}_outgoing_buffer_0.wav"), pj.PJMEDIA_FILE_NO_LOOP)
                             self.__media_player_1.startTransmit(call_media)
                         else:
                             self.__media_player_1.stopTransmit(call_media)
                             self.__media_player_2 = pj.AudioMediaPlayer()  
-                            self.__media_player_2.createPlayer(str(HERE / "../artifacts/outgoing_buffer_1.wav"), pj.PJMEDIA_FILE_NO_LOOP)
+                            self.__media_player_2.createPlayer(str(HERE / f"../artifacts/{self.__id}_outgoing_buffer_1.wav"), pj.PJMEDIA_FILE_NO_LOOP)
                             self.__media_player_2.startTransmit(call_media)  
                 except:    
                     print('Error occured while speaking (probably because user hung up)')
@@ -244,7 +248,7 @@ class softphone:
         if not self.__record_incoming_audio(self.__config['silence_sample_interval']):
             return ""
         
-        last_segment = AudioSegment.from_wav(str(HERE / "../artifacts/incoming.wav"))
+        last_segment = AudioSegment.from_wav(str(HERE / f"../artifacts/{self.__id}_incoming.wav"))
         while last_segment.dBFS < self.__config['silence_threshold']:
             
             if not self.active_call:
@@ -252,7 +256,7 @@ class softphone:
             
             if not self.__record_incoming_audio(self.__config['silence_sample_interval']):
                 return ""
-            last_segment = AudioSegment.from_wav(str(HERE / "../artifacts/incoming.wav"))
+            last_segment = AudioSegment.from_wav(str(HERE / f"../artifacts/{self.__id}_incoming.wav"))
             
         # record audio while over silence threshold
         combined_segments = last_segment
@@ -263,14 +267,14 @@ class softphone:
             
             if not self.__record_incoming_audio(self.__config['speaking_sample_interval']):
                 return ""
-            last_segment = AudioSegment.from_wav(str(HERE / "../artifacts/incoming.wav"))
+            last_segment = AudioSegment.from_wav(str(HERE / f"../artifacts/{self.__id}_incoming.wav"))
             combined_segments += last_segment
         
         # output combined audio to file
-        combined_segments.export(str(HERE / "../artifacts/incoming_combined.wav"), format="wav")
+        combined_segments.export(str(HERE / f"../artifacts/{self.__id}_incoming_combined.wav"), format="wav")
         
         # transcribe audio
-        audio_file = open(str(HERE / "../artifacts/incoming_combined.wav"), "rb")
+        audio_file = open(str(HERE / f"../artifacts/{self.__id}_incoming_combined.wav"), "rb")
         transcription = self.__openai_client.audio.transcriptions.create(
         model="whisper-1", 
         file=audio_file
@@ -284,7 +288,7 @@ class softphone:
                 call_media = self.active_call.getAudioMedia(i)
                 
                 self.__media_recorder = pj.AudioMediaRecorder()
-                self.__media_recorder.createRecorder(str(HERE / "../artifacts/incoming.wav"))
+                self.__media_recorder.createRecorder(str(HERE / f"../artifacts/{self.__id}_incoming.wav"))
                 call_media.startTransmit(self.__media_recorder)
                 time.sleep(duration)
                 
@@ -295,3 +299,58 @@ class softphone:
                 del self.__media_recorder
                 
         return True
+    
+# share one library instance and account for multiple sofpthones
+class softphone_group:
+    pjsua_endpoint = None
+    pjsua_account = None
+    sip_credentials = None
+    softphones = []
+    
+    is_listening = False
+    
+    def __init__(self, credentials_path):
+        self.softphones = []
+
+        # Load SIP Credentials
+        with open(credentials_path, 'r') as f:
+            self.sip_credentials = json.load(f)
+            
+        # Initialize PJSUA2 endpoint
+        ep_cfg = pj.EpConfig()
+        ep_cfg.uaConfig.threadCnt = 1
+        ep_cfg.logConfig.level = 1
+        ep_cfg.logConfig.consoleLevel = 1
+        self.pjsua_endpoint = pj.Endpoint()
+        self.pjsua_endpoint.libCreate()
+        self.pjsua_endpoint.libInit(ep_cfg)
+
+        sipTpConfig = pj.TransportConfig()
+        sipTpConfig.port = 5061
+        self.pjsua_endpoint.transportCreate(pj.PJSIP_TRANSPORT_UDP, sipTpConfig)
+        self.pjsua_endpoint.libStart()
+        
+        # Create SIP Account
+        acfg = pj.AccountConfig()
+        acfg.idUri = self.sip_credentials['idUri']
+        acfg.regConfig.registrarUri = self.sip_credentials['registrarUri']
+        cred = pj.AuthCredInfo("digest", "*", self.sip_credentials['username'], 0, self.sip_credentials['password'])
+        acfg.sipConfig.authCreds.append(cred)
+
+        self.pjsua_account = group_account(self)
+        self.pjsua_account.create(acfg)
+        
+        # initialize media devices
+        self.pjsua_endpoint.audDevManager().setNullDev()
+        
+        
+        self.is_listening = True
+        
+    def add_phone(self, phone):
+        self.softphones.append(phone)
+        
+    def remove_phone(self, phone):
+        self.softphones.remove(phone)
+        if len(self.softphones) == 0:
+            self.pjsua_account.shutdown()
+            self.pjsua_endpoint.libDestroy()
