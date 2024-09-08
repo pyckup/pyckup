@@ -2,8 +2,8 @@
 import os
 from pathlib import Path
 import yaml
-from llm_extractor import llm_extractor, ExtractionStatus
-from softphone import softphone, softphone_group
+from calle_core.llm_extractor import llm_extractor, ExtractionStatus
+from calle_core.softphone import softphone, softphone_group
 import sqlite3
 import threading
 
