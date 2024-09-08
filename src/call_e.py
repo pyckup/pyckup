@@ -36,10 +36,11 @@ class call_e:
         # ensure that results table exists
         self.outgoing_conversation_title = self.outgoing_conversation_config['conversation_title'].lower().replace(" ", "_")
         fields = ""
-        for item in self.outgoing_conversation_config['active_conversation']:
-            if 'title' in item:
-                fields += ",\n"
-                fields +=  f"{item['title'].lower().replace(' ', '_')} TEXT"
+        for path in self.outgoing_conversation_config['conversation_paths'].values():
+            for item in path:
+                if 'title' in item:
+                    fields += ",\n"
+                    fields +=  f"{item['title'].lower().replace(' ', '_')} TEXT"
             
         cursor = self.db.cursor()
         cursor.execute(f"""

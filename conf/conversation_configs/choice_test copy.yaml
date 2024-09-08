@@ -1,0 +1,22 @@
+conversation_title: Choice Test
+active_conversation:
+  - type: read
+    text: Hallo, es ist schön mit dir zu reden.
+    interactive: false
+  - type: information
+    title: Fruit
+    description: Lieblingsfrucht des Nutzers
+    format: Text des Namen der Frucht, sollte eine generelle Art sein, nicht zu spezifisch.
+  - type: prompt
+    prompt: Verabschiede dich freundlich vom Benutzer.
+    interactive: false
+
+aborted_conversation:
+  - type: prompt
+    prompt: Entschuldige dich beim Benutzer.
+    interactive: false
+  - type: read
+    text: Auf Wiedersehen. Dein Call-E.
+    interactive: false
+  
+

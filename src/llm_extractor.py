@@ -33,22 +33,37 @@ class llm_extractor:
         self.chat_history = []
 
         self.__conversation_config = copy.deepcopy(conversation_config)
-        self.__conversation_items = self.__conversation_config['active_conversation']
-        self.__current_item = self.__conversation_items.pop(0)
+        self.__load_conversation_path("entry")
         self.__extracted_information = {}
         self.__information_lock = threading.Lock()
 
         self.information_extraction_chain = self.__verify_information | RunnableBranch(
             (
-                lambda data: data["verification_status"] == "YES",
-                self.__extraction_successful,
+                lambda data: data["information_verification_status"] == "YES",
+                self.__information_extraction_successful,
             ),
             (
-                lambda data: data["verification_status"] == "NO",
+                lambda data: data["information_verification_status"] == "NO",
                 self.__make_information_extractor,
             ),
             self.__extraction_aborted,
         )
+        
+        self.choice_extraction_chain = self.__verify_choice | RunnableBranch(
+            (
+                lambda data: data["choice"] == "##NONE##",
+                self.__make_choice_extractor,
+            ),
+            (
+                lambda data: data["choice"] == "##ABORT##",
+                self.__extraction_aborted,
+            ),
+            self.__choice_extraction_successful,
+        )
+        
+    def __load_conversation_path(self, conversation_path):
+        self.__conversation_items = self.__conversation_config['conversation_paths'][conversation_path]
+        self.__current_item = self.__conversation_items.pop(0)
         
     def __verify_information(self, data):
         """
@@ -69,7 +84,26 @@ class llm_extractor:
             ]
         )
         verifyer_chain = verification_prompt | self.__llm | StrOutputParser()
-        data["verification_status"] = verifyer_chain.invoke(data).strip()
+        data["information_verification_status"] = verifyer_chain.invoke(data).strip()
+        return data
+
+    def __verify_choice(self, data):
+        verification_prompt = ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    """The user was given a choice between multiple options. Check if the user message contains a clear selection of one of
+                    the given options. If so, output the choice. If not, output '##NONE##'.
+                    If the user says in some way that they don't want to provide
+                    the information, output '##ABORT##'. Don't ouput anything but the choice or ##NONE## or ##ABORT##. If the user provides no 
+                    message, output ##NONE##""",
+                ),
+                ("system", "Choice prompt: {current_choice}, Possible choices: {current_choice_options}"),
+                ("user", "{input}"),
+            ]
+        )
+        verifyer_chain = verification_prompt | self.__llm | StrOutputParser()
+        data["choice"] = verifyer_chain.invoke(data).strip()
         return data
 
     def __filter_information(self, data):
@@ -119,6 +153,24 @@ class llm_extractor:
         information_extractor = extraction_prompt | self.__llm | StrOutputParser()
         return information_extractor
     
+    def __make_choice_extractor(self, data):
+        choices = ', '.join(data["current_choice_options"].keys())
+        extraction_prompt = ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    """Ask the user for a choice between multiple options. The type of choice is given by the choice prompt.
+                    If it is not absolutely clear from the prompt, outline the possible choices for the user.
+                    If the user derivates from the topic of the choice, gently guide 
+                    them back to the topic. Be brief. Use the language in which the choice prompt is given.""",
+                ),
+                ("system", f"Choice prompt: {data['current_choice']}, Possible choices: {choices}"),
+                MessagesPlaceholder(variable_name="chat_history"),
+            ]
+        )
+        choice_extractor = extraction_prompt | self.__llm | StrOutputParser()
+        return choice_extractor
+    
     def __append_filtered_info(self, data, title):
         self.__information_lock.acquire()
         self.__extracted_information[title] = (
@@ -126,7 +178,7 @@ class llm_extractor:
         )
         self.__information_lock.release()
 
-    def __extraction_successful(self, data):
+    def __information_extraction_successful(self, data):
         """
         Store filtered extracted information and either continue with the next information or finish
         the process by thanking the user.
@@ -143,6 +195,13 @@ class llm_extractor:
             return ""
          
         return self.__process_conversation_items(data["input"], append_input=False)
+    
+    def __choice_extraction_successful(self, data):
+        selected_choice = data["choice"]
+        self.__conversation_items = data['current_choice_options'][selected_choice]
+        self.__current_item = self.__conversation_items.pop(0)
+        return self.__process_conversation_items(data["input"], append_input=False)
+
 
     def __extraction_aborted(self, data):
         """
@@ -150,7 +209,7 @@ class llm_extractor:
         """
         self.status = ExtractionStatus.ABORTED
         
-        self.__conversation_items = self.__conversation_config['aborted_conversation']
+        self.__conversation_items = self.__conversation_config['conversation_paths']["aborted"]
         if len(self.__conversation_items) > 0:
             self.__current_item = self.__conversation_items.pop(0)
         else:
@@ -189,6 +248,8 @@ class llm_extractor:
                 response = self.__execute_prompt(self.__current_item['prompt']) + "\n"
                 collected_response += response
                 self.chat_history.append(AIMessage(content=response))
+            elif self.__current_item['type'] == "path":
+                self.__conversation_items = self.__conversation_config['conversation_paths'][self.__current_item['path']]
             elif self.__current_item['type'] == "information":
                 response = self.information_extraction_chain.invoke(
                 {
@@ -202,10 +263,23 @@ class llm_extractor:
                 collected_response += response
                 self.chat_history.append(AIMessage(content=response))
                 break
+            elif self.__current_item['type'] == "choice":
+                response = self.choice_extraction_chain.invoke(
+                {
+                    "input": user_input,
+                    "chat_history": self.chat_history,
+                    "current_choice": self.__current_item[
+                        "choice"
+                    ],
+                    "current_choice_options": self.__current_item["options"],
+                })
+                collected_response += response
+                self.chat_history.append(AIMessage(content=response))
+                break
             
             if len(self.__conversation_items) > 0:
                 # for interactive items, breakt the loop to get user input. Last item can`t be interactive.
-                if self.__current_item['interactive'] == True:
+                if self.__current_item.get('interactive', False):
                     self.__current_item = self.__conversation_items.pop(0)
                     break
                 else:
