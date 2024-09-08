@@ -9,6 +9,7 @@ from langchain_openai import ChatOpenAI
 from langchain_community.llms import Ollama
 from enum import Enum
 import threading
+import importlib
 
 
 HERE = Path(os.path.abspath(__file__)).parent
@@ -276,6 +277,16 @@ class llm_extractor:
                 collected_response += response
                 self.chat_history.append(AIMessage(content=response))
                 break
+            elif self.__current_item['type'] == "function":
+                module = importlib.import_module(self.__current_item['module'])
+                function = getattr(module, self.__current_item['function'])
+                response = function(self.__extracted_information)
+                collected_response += response
+            elif self.__current_item['type'] == "function_choice":
+                module = importlib.import_module(self.__current_item['module'])
+                function = getattr(module, self.__current_item['function'])
+                choice = function(self.__extracted_information)
+                self.__conversation_items = self.__current_item['options'][choice]
             
             if len(self.__conversation_items) > 0:
                 # for interactive items, breakt the loop to get user input. Last item can`t be interactive.

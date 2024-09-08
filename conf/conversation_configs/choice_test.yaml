@@ -4,25 +4,39 @@ conversation_paths:
     - type: read
       text: Hallo, es ist schön mit dir zu reden.
       interactive: false
-    - type: choice
-      choice: Was ist die Lieblingsfrucht des Nutzers?
+    - type: function_choice
+      module: forwarding_service.test
+      function: fruit_is_known
       options:
-        Apfel:
+        "yes":
           - type: read
-            text: Du magst Äpfel. Die sind rot und lecker.
+            text: Ich kenne deine Lieblingsfrucht schon.
             interactive: false
           - type: path
             path: end
-        Mango:
-          - type: read
-            text: Du magst Mangos. Die sind gelb und saftig.
-            interactive: false
-          - type: path
-            path: end 
+        "no":
+          - type: choice
+            choice: Was ist die Lieblingsfrucht des Nutzers?
+            options:
+              Apfel:
+                - type: read
+                  text: Du magst Äpfel. Die sind rot und lecker.
+                  interactive: false
+                - type: path
+                  path: end
+              Mango:
+                - type: read
+                  text: Du magst Mangos. Die sind gelb und saftig.
+                  interactive: false
+                - type: path
+                  path: end 
   end:
     - type: prompt
       prompt: Bedanke dich mit einem fruchtigen Witz.
       interactive: false
+    - type: function
+      module: forwarding_service.test
+      function: prettyprint
     - type: read
       text: Auf Wiedersehen. Dein Call-E.
       interactive: false
