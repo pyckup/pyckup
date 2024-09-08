@@ -17,9 +17,9 @@ class call_e:
     outgoing_conversation_title = None
     db = None
     
-    def __init__(self, sip_credentials_path, outgoing_conversation_config_path):
+    def __init__(self, sip_credentials_path, outgoing_conversation_config_path, db_path):
         self.__sip_credentials_path = sip_credentials_path
-        self.__setup_db()
+        self.__setup_db(db_path)
         self.update_outgoing_conversation_config(outgoing_conversation_config_path)
         
     def __del__(self):
@@ -63,27 +63,28 @@ class call_e:
         
         self.db.commit()
     
-    def __setup_db(self):
-        self.db = sqlite3.connect(HERE / "../call_e.db")
+    def __setup_db(self, db_path):
+        self.db = sqlite3.connect(db_path)
         cursor = self.db.cursor()
         
         # Ensure contacts table exists
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS contacts (
                 contact_id INTEGER PRIMARY KEY, 
-                name TEXT,
+                first_name TEXT,
+                last_name TEXT,
                 phone_number TEXT,
                 adress TEXT,
-                CONSTRAINT unq UNIQUE (name, phone_number)
+                CONSTRAINT unq UNIQUE (first_name, phone_number)
             )"""
         )
         self.db.commit()
     
-    def add_contact(self, name, phone_number, adress):
+    def add_contact(self, first_name, last_name, phone_number, adress):
         cursor = self.db.cursor()
         cursor.execute("""
-            INSERT OR IGNORE INTO contacts (name, phone_number, adress) VALUES (?, ?, ?)
-        """, (name, phone_number, adress))
+            INSERT OR IGNORE INTO contacts (first_name, last_name, phone_number, adress) VALUES (?, ?, ?, ?)
+        """, (first_name, last_name, phone_number, adress))
         
         self.db.commit()
     
@@ -99,9 +100,10 @@ class call_e:
             return None
         
         return {
-            "name": contact_data[1],
-            "phone_number": contact_data[2],
-            "adress": contact_data[3]
+            "first_name": contact_data[1],
+            "last_name": contact_data[2],
+            "phone_number": contact_data[3],
+            "adress": contact_data[4]
         }
     
     def get_contact_status(self, contact_id):
@@ -151,8 +153,9 @@ class call_e:
             return
         
         print("Call picked up. Setting up extractor.")
-
-        extractor = llm_extractor(self.outgoing_conversation_config)
+    
+        call_info = sf.active_call.getInfo()
+        extractor = llm_extractor(self.outgoing_conversation_config, call_info=call_info)
         extractor_response = extractor.run_extraction_step("")
         conversation_log += "Call-E: " + extractor_response + "\n"
         sf.say(extractor_response)
@@ -252,7 +255,8 @@ class call_e:
         
         print("Incoming call. Setting up extractor.")
 
-        extractor = llm_extractor(outgoing_conversation_config)
+        call_info = sf.active_call.getInfo()
+        extractor = llm_extractor(outgoing_conversation_config, call_info=call_info)
         extractor_response = extractor.run_extraction_step("")
         sf.say(extractor_response)
         

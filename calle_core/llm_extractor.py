@@ -16,7 +16,7 @@ HERE = Path(os.path.abspath(__file__)).parent
 
 
 class llm_extractor:    
-    def __init__(self, conversation_config, llm_provider="openai"):
+    def __init__(self, conversation_config, llm_provider="openai", call_info = None):
         """Create LLM extractor object.
 
         Args:
@@ -37,6 +37,8 @@ class llm_extractor:
         self.__load_conversation_path("entry")
         self.__extracted_information = {}
         self.__information_lock = threading.Lock()
+        
+        self.__call_info = call_info
 
         self.information_extraction_chain = self.__verify_information | RunnableBranch(
             (
@@ -161,7 +163,7 @@ class llm_extractor:
                 (
                     "system",
                     """Ask the user for a choice between multiple options. The type of choice is given by the choice prompt.
-                    If it is not absolutely clear from the prompt, outline the possible choices for the user.
+                    Don`t say anything about the choice options.
                     If the user derivates from the topic of the choice, gently guide 
                     them back to the topic. Be brief. Use the language in which the choice prompt is given.""",
                 ),
@@ -278,14 +280,18 @@ class llm_extractor:
                 self.chat_history.append(AIMessage(content=response))
                 break
             elif self.__current_item['type'] == "function":
+                self.__information_lock.acquire()
+                self.__information_lock.release()
                 module = importlib.import_module(self.__current_item['module'])
                 function = getattr(module, self.__current_item['function'])
-                response = function(self.__extracted_information)
+                response = function(self.__extracted_information, self.__call_info)
                 collected_response += response
             elif self.__current_item['type'] == "function_choice":
+                self.__information_lock.acquire()
+                self.__information_lock.release()
                 module = importlib.import_module(self.__current_item['module'])
                 function = getattr(module, self.__current_item['function'])
-                choice = function(self.__extracted_information)
+                choice = function(self.__extracted_information, self.__call_info)
                 self.__conversation_items = self.__current_item['options'][choice]
             
             if len(self.__conversation_items) > 0:
