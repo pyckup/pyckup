@@ -74,17 +74,17 @@ class call_e:
                 first_name TEXT,
                 last_name TEXT,
                 phone_number TEXT,
-                adress TEXT,
+                address TEXT,
                 CONSTRAINT unq UNIQUE (first_name, phone_number)
             )"""
         )
         self.db.commit()
     
-    def add_contact(self, first_name, last_name, phone_number, adress):
+    def add_contact(self, first_name, last_name, phone_number, address):
         cursor = self.db.cursor()
         cursor.execute("""
-            INSERT OR IGNORE INTO contacts (first_name, last_name, phone_number, adress) VALUES (?, ?, ?, ?)
-        """, (first_name, last_name, phone_number, adress))
+            INSERT OR IGNORE INTO contacts (first_name, last_name, phone_number, address) VALUES (?, ?, ?, ?)
+        """, (first_name, last_name, phone_number, address))
         
         self.db.commit()
     
@@ -103,7 +103,7 @@ class call_e:
             "first_name": contact_data[1],
             "last_name": contact_data[2],
             "phone_number": contact_data[3],
-            "adress": contact_data[4]
+            "address": contact_data[4]
         }
     
     def get_contact_status(self, contact_id):
@@ -154,8 +154,7 @@ class call_e:
         
         print("Call picked up. Setting up extractor.")
     
-        call_info = sf.active_call.getInfo()
-        extractor = llm_extractor(self.outgoing_conversation_config, call_info=call_info)
+        extractor = llm_extractor(self.outgoing_conversation_config, softphone=sf)
         extractor_response = extractor.run_extraction_step("")
         conversation_log += "Call-E: " + extractor_response + "\n"
         sf.say(extractor_response)
@@ -255,8 +254,7 @@ class call_e:
         
         print("Incoming call. Setting up extractor.")
 
-        call_info = sf.active_call.getInfo()
-        extractor = llm_extractor(outgoing_conversation_config, call_info=call_info)
+        extractor = llm_extractor(outgoing_conversation_config, softphone=sf)
         extractor_response = extractor.run_extraction_step("")
         sf.say(extractor_response)
         

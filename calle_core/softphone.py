@@ -121,6 +121,18 @@ class softphone:
         call_op_param = pj.CallOpParam(True)
         self.active_call.makeCall(sip_adress, call_op_param)
     
+    def forward_call(self, phone_number):
+        if not self.active_call:
+            print("Can't forward call: No call in progress.")
+        
+        # construct SIP adress
+        registrar = self.__group.sip_credentials['registrarUri'].split(':')[1]
+        sip_adress = "sip:" + phone_number + "@" + registrar
+        
+        # forward call
+        call_op_param = pj.CallOpParam(True)
+        self.active_call.xfer(sip_adress, call_op_param)
+    
     def wait_for_stop_calling(self):
         if not self.active_call:
             return
