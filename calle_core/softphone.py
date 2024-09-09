@@ -11,6 +11,7 @@ from pydub import AudioSegment
 import numpy as np
 import yaml
 import uuid
+import glob
 
 HERE = Path(os.path.abspath(__file__)).parent
 
@@ -32,6 +33,11 @@ class softphone_call(pj.Call):
             self.softphone.hangup()
         
         super(softphone_call, self).onCallState(prm)
+    
+    def onCallTransferStatus(self, prm):
+        print("Transfer status: " + str(prm.statusCode))
+        print("Transfer status reason: " + prm.reason)
+        super(softphone_call, self).onCallTransferStatus(prm)
         
 class group_account(pj.Account):
     def __init__(self, group):
@@ -99,6 +105,12 @@ class softphone:
         self.__media_player_2 = None
         self.__media_recorder = None
         self.__group.remove_phone(self)
+        
+    def __remove_artifacts(self):
+        artifacts = glob.glob(os.path.join(HERE / "../artifacts/", f'{self.__id}*'))
+        for artifact in artifacts:
+            if os.path.isfile(artifact):
+                os.remove(artifact)
     
     def has_picked_up_call(self):
         if self.active_call:
@@ -124,6 +136,8 @@ class softphone:
     def forward_call(self, phone_number):
         if not self.active_call:
             print("Can't forward call: No call in progress.")
+            
+        print("Forwarding call...")
         
         # construct SIP adress
         registrar = self.__group.sip_credentials['registrarUri'].split(':')[1]
@@ -131,6 +145,9 @@ class softphone:
         
         # forward call
         call_op_param = pj.CallOpParam(True)
+        # call_op_param.statusCode = pj.PJSIP_SC_DECLINE
+        # transfer_call = softphone_call(self.__group.pjsua_account, self)
+        # transfer_call.makeCall(sip_adress, call_op_param)
         self.active_call.xfer(sip_adress, call_op_param)
     
     def wait_for_stop_calling(self):
@@ -151,6 +168,7 @@ class softphone:
 
         self.active_call.hangup(pj.CallOpParam(True))
         self.active_call = None
+        self.__remove_artifacts()
                 
     def say(self, message):        
         if not self.active_call:
@@ -338,7 +356,7 @@ class softphone_group:
         self.pjsua_endpoint.libInit(ep_cfg)
 
         sipTpConfig = pj.TransportConfig()
-        sipTpConfig.port = 5061
+        sipTpConfig.port = 5060
         self.pjsua_endpoint.transportCreate(pj.PJSIP_TRANSPORT_UDP, sipTpConfig)
         self.pjsua_endpoint.libStart()
         
