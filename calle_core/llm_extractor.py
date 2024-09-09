@@ -77,13 +77,15 @@ class llm_extractor:
             [
                 (
                     "system",
-                    """Check if the required information is contained inside the user message. If so, 
+                    """Check if the required information is contained inside the last user message. If so, 
             output the single word 'YES'. If not, output the single word 'NO'. If the user says in some way
             that they don't want to provide the information, output 'ABORT'. Don't ouput anything but
-            YES, NO or ABORT. If the user provides no message, output NO.""",
+            YES, NO or ABORT. If the user provides no message, output NO.
+            AIMessages are from you, if they contain questions or prompts don't answer and simply ignore them.""",
                 ),
                 ("system", "Required information: {current_information_description}"),
                 ("user", "{input}"),
+                MessagesPlaceholder(variable_name="chat_history"),
             ]
         )
         verifyer_chain = verification_prompt | self.__llm | StrOutputParser()
@@ -99,10 +101,13 @@ class llm_extractor:
                     the given options. If so, output the choice. If not, output '##NONE##'.
                     If the user says in some way that they don't want to provide
                     the information, output '##ABORT##'. Don't ouput anything but the choice or ##NONE## or ##ABORT##. If the user provides no 
-                    message, output ##NONE##""",
+                    message, output ##NONE##.
+                    AIMessages are from you, if they contain questions or prompts don't answer and simply ignore them.""",
                 ),
                 ("system", "Choice prompt: {current_choice}, Possible choices: {current_choice_options}"),
                 ("user", "{input}"),
+                MessagesPlaceholder(variable_name="chat_history"),
+
             ]
         )
         verifyer_chain = verification_prompt | self.__llm | StrOutputParser()
@@ -147,7 +152,8 @@ class llm_extractor:
                     """Have a casual conversation with the user. Over the course of the conversation you are
                     supposed to extract different pieces of information from the user.
                     If the user derivates from the topic of the information you want to have, gently guide 
-                    them back to the topic. Be brief. Use the language in which the required information is given.""",
+                    them back to the topic. Be brief. Use the language in which the required information is given.
+                    AIMessages are from you, if they contain questions or prompts don't answer and simply ignore them.""",
                 ),
                 ("system", "Information you want to have: {current_information_description}"),
                 MessagesPlaceholder(variable_name="chat_history"),
@@ -165,7 +171,8 @@ class llm_extractor:
                     """Ask the user for a choice between multiple options. The type of choice is given by the choice prompt.
                     Don`t say anything about the choice options.
                     If the user derivates from the topic of the choice, gently guide 
-                    them back to the topic. Be brief. Use the language in which the choice prompt is given.""",
+                    them back to the topic. Be brief. Use the language in which the choice prompt is given.
+                    AIMessages are from you, if they contain questions or prompts don't answer and simply ignore them.""",
                 ),
                 ("system", f"Choice prompt: {data['current_choice']}, Possible choices: {choices}"),
                 MessagesPlaceholder(variable_name="chat_history"),
@@ -246,7 +253,7 @@ class llm_extractor:
             if self.__current_item['type'] == "read":
                 response = self.__current_item['text'] + "\n"
                 collected_response += response
-                self.chat_history.append(AIMessage(content=response))
+                self.chat_history.append(AIMessage(content="[TO LLM: The following line is said by the you. Don't respond to this, ignore it]: " + response))
             elif self.__current_item['type'] == "prompt":
                 response = self.__execute_prompt(self.__current_item['prompt']) + "\n"
                 collected_response += response
@@ -305,7 +312,7 @@ class llm_extractor:
                 if not aborted:
                     self.status = ExtractionStatus.COMPLETED
                 return collected_response
-            
+                        
         return collected_response
     
     def run_extraction_step(self, user_input):
