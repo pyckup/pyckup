@@ -6,6 +6,7 @@ from calle_core.llm_extractor import llm_extractor, ExtractionStatus
 from calle_core.softphone import softphone, softphone_group
 import sqlite3
 import threading
+import time
 
 HERE = Path(os.path.abspath(__file__)).parent
 
@@ -166,9 +167,6 @@ class call_e:
             extractor_response = extractor.run_extraction_step(user_input)
             conversation_log += "Call-E: " + extractor_response + "\n"
             sf.say(extractor_response)
-
-        sf.hangup()
-        print("Call ended.")
             
         if extractor.get_status() != ExtractionStatus.COMPLETED:
             print("Extraction aborted")
@@ -199,6 +197,12 @@ class call_e:
             [contact_id] + list(information.values()))
             self.db.commit()
             
+        # usually we would hang up here, but if the call is forwarded then should keep the connection open
+        while sf.is_forwarded():
+            time.sleep(1)
+        sf.hangup()
+        print("Call ended.")
+        
         # save log file
         if enable_logging:
             os.makedirs(HERE / "../logs", exist_ok=True)
@@ -263,14 +267,17 @@ class call_e:
             sf.play_audio("resources/processing.wav")
             extractor_response = extractor.run_extraction_step(user_input)
             sf.say(extractor_response)
-
-        sf.hangup()
-        print("Call ended.")
             
         if extractor.get_status() != ExtractionStatus.COMPLETED:
             print("Extraction aborted")
         else:
             print("Extraction completed")
+        
+        # usually we would hang up here, but if the call is forwarded then should keep the connection open
+        while sf.is_forwarded():
+            time.sleep(1)
+        sf.hangup()
+        print("Call ended.")
             
         listen_thread = threading.Thread(target=self.__softphone_listen, args=(sf, sf_group, outgoing_conversation_config))
         listen_thread.start()

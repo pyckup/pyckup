@@ -32,12 +32,7 @@ class softphone_call(pj.Call):
         if call_info.state == pj.PJSIP_INV_STATE_DISCONNECTED:
             self.softphone.hangup()
         
-        super(softphone_call, self).onCallState(prm)
-    
-    def onCallTransferStatus(self, prm):
-        print("Transfer status: " + str(prm.statusCode))
-        print("Transfer status reason: " + prm.reason)
-        super(softphone_call, self).onCallTransferStatus(prm)
+        super(softphone_call, self).onCallState(prm)        
         
 class group_account(pj.Account):
     def __init__(self, group):
@@ -70,6 +65,7 @@ class softphone:
     
     __group = None
     active_call = None
+    __paired_call = None
     
     __tts_engine = None
     __media_player_1 = None
@@ -91,6 +87,7 @@ class softphone:
         self.__group.add_phone(self)
         
         self.__id = uuid.uuid4()
+        self.__paired_call = None
         
         # self.__tts_engine = pyttsx3.init()
         self.__media_player_1 = None
@@ -112,13 +109,7 @@ class softphone:
             if os.path.isfile(artifact):
                 os.remove(artifact)
     
-    def has_picked_up_call(self):
-        if self.active_call:
-            call_info = self.active_call.getInfo()
-            for i in range(call_info.media.size()):
-                if (call_info.media[i].type==pj.PJMEDIA_TYPE_AUDIO and self.active_call.getMedia(i)):
-                    return True
-        return False
+
     
     def call(self, phone_number): 
         if self.active_call:
@@ -136,6 +127,11 @@ class softphone:
     def forward_call(self, phone_number):
         if not self.active_call:
             print("Can't forward call: No call in progress.")
+            return False
+            
+        if self.__paired_call:
+            print("Can't forward call: Already in forwarding session.")
+            return False
             
         print("Forwarding call...")
         
@@ -143,36 +139,106 @@ class softphone:
         registrar = self.__group.sip_credentials['registrarUri'].split(':')[1]
         sip_adress = "sip:" + phone_number + "@" + registrar
         
-        # forward call
+        # make call to forwarded number
+        self.__paired_call = softphone_call(self.__group.pjsua_account, self)
         call_op_param = pj.CallOpParam(True)
-        # call_op_param.statusCode = pj.PJSIP_SC_DECLINE
-        # transfer_call = softphone_call(self.__group.pjsua_account, self)
-        # transfer_call.makeCall(sip_adress, call_op_param)
-        self.active_call.xfer(sip_adress, call_op_param)
+        self.__paired_call.makeCall(sip_adress, call_op_param)
+        
+        # wait for pick up
+        self.__wait_for_stop_calling("paired")
+        
+        if not self.__has_picked_up_call("paired"):
+            print("Call not picked up.")
+            return False
+        
+        # connect audio medias of both calls
+        active_call_media = None
+        paired_call_media = None
+        
+        active_call_info = self.active_call.getInfo()
+        for i in range(len(active_call_info.media)):
+            if active_call_info.media[i].type == pj.PJMEDIA_TYPE_AUDIO: #and active_call_info.media[i].status == pj.PJSUA_CALL_MEDIA_ACTIVE:
+                active_call_media = self.active_call.getAudioMedia(i)
+        
+        paired_call_info = self.__paired_call.getInfo()
+        for i in range(len(paired_call_info.media)):
+            if paired_call_info.media[i].type == pj.PJMEDIA_TYPE_AUDIO: #and paired_call_info.media[i].status == pj.PJSUA_CALL_MEDIA_ACTIVE:
+                paired_call_media = self.__paired_call.getAudioMedia(i)
+                
+        if not active_call_media or not paired_call_media:
+            print("No audio media available.")
+            return False
+        
+        if self.__media_player_1:
+            self.__media_player_1.stopTransmit(active_call_media)
+        if self.__media_player_2:
+            self.__media_player_2.stopTransmit(active_call_media)
+        active_call_media.startTransmit(paired_call_media)
+        paired_call_media.startTransmit(active_call_media)
+        
+        return True
     
-    def wait_for_stop_calling(self):
-        if not self.active_call:
+    def is_forwarded(self):
+        return self.__paired_call is not None
+    
+    def __has_picked_up_call(self, call_type="active"):
+        if call_type == "active":
+            call = self.active_call
+        elif call_type == "paired":
+            call = self.__paired_call
+        else:
+            return False
+        
+        if call:
+            call_info = call.getInfo()
+            for i in range(call_info.media.size()):
+                if (call_info.media[i].type==pj.PJMEDIA_TYPE_AUDIO and call.getMedia(i)):
+                    return True
+        return False
+        
+        
+    def has_picked_up_call(self):
+        return self.__has_picked_up_call("active")
+        
+    def __wait_for_stop_calling(self, call_type="active"):
+        if call_type == "active":
+            call = self.active_call
+        elif call_type == "paired":
+            call = self.__paired_call
+        else:
+            return
+            
+        if not call:
             return
         
-        call_info = self.active_call.getInfo()
+        call_info = call.getInfo()
         while(call_info.state == pj.PJSIP_INV_STATE_CALLING or call_info.state == pj.PJSIP_INV_STATE_EARLY):
             time.sleep(0.2)
-            if not self.active_call:
+            if not call:
                 return
-            call_info = self.active_call.getInfo()
+            call_info = call.getInfo()
+    
+    def wait_for_stop_calling(self):
+        self.__wait_for_stop_calling("active")
+        
     
     def hangup(self):
-        if not self.active_call:
-            print("Can't hangup: No call in progress.")
-            return
+        if self.active_call:
+            self.active_call.hangup(pj.CallOpParam(True))
+            self.active_call = None
+        
+        if self.__paired_call:
+            self.__paired_call.hangup(pj.CallOpParam(True))
+            self.__paired_call = None
 
-        self.active_call.hangup(pj.CallOpParam(True))
-        self.active_call = None
         self.__remove_artifacts()
                 
     def say(self, message):        
         if not self.active_call:
             print("Can't say: No call in progress.")
+            return
+        if self.__paired_call:
+            print("Can't say: Call is in forwarding session.")
             return
                 
         call_info = self.active_call.getInfo()
@@ -257,6 +323,9 @@ class softphone:
         if not self.active_call:
             print("Can't play audio: No call in progress.")
             return
+        if self.__paired_call:
+            print("Can't play audio: Call is in forwarding session.")
+            return
         
         call_info = self.active_call.getInfo()
         for i in range(len(call_info.media)):
@@ -281,7 +350,7 @@ class softphone:
         last_segment = AudioSegment.from_wav(str(HERE / f"../artifacts/{self.__id}_incoming.wav"))
         while last_segment.dBFS < self.__config['silence_threshold']:
             
-            if not self.active_call:
+            if not self.active_call or self.__paired_call:
                 return ""
             
             if not self.__record_incoming_audio(self.__config['silence_sample_interval']):
@@ -292,7 +361,7 @@ class softphone:
         combined_segments = last_segment
         while last_segment.dBFS > self.__config['silence_threshold']:
             
-            if not self.active_call:
+            if not self.active_call or self.__paired_call:
                 return ""
             
             if not self.__record_incoming_audio(self.__config['speaking_sample_interval']):
