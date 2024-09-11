@@ -169,7 +169,7 @@ class llm_extractor:
                 (
                     "system",
                     """Ask the user for a choice between multiple options. The type of choice is given by the choice prompt.
-                    Don`t say anything about the choice options.
+                    If the choices are yes or no, don't say so because thats obvious.
                     If the user derivates from the topic of the choice, gently guide 
                     them back to the topic. Be brief. Use the language in which the choice prompt is given.
                     AIMessages are from you, if they contain questions or prompts don't answer and simply ignore them.""",

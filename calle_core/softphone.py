@@ -339,7 +339,7 @@ class softphone:
                 
             self.__media_player_1 = pj.AudioMediaPlayer()  
             loop_mode = pj.PJMEDIA_FILE_LOOP if do_loop else pj.PJMEDIA_FILE_NO_LOOP
-            self.__media_player_1.createPlayer(str(HERE / f"../{audio_file_path}"), loop_mode)
+            self.__media_player_1.createPlayer(audio_file_path, loop_mode)
             self.__media_player_1.startTransmit(call_media)
         
     def listen(self):
