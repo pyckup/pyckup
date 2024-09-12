@@ -24,7 +24,7 @@ class llm_extractor:
             llm_provider (str, optional): Which LLM to use. Options: openai, ollama. Defaults to "openai".
         """
         if llm_provider == "openai":
-            self.__llm = ChatOpenAI(api_key=os.environ["OPENAI_API_KEY"], model="gpt-4o-mini")
+            self.__llm = ChatOpenAI(api_key=os.environ["OPENAI_API_KEY"], model="gpt-4o")
         elif llm_provider == "ollama":
             self.__llm = Ollama(model="gemma2:2b-instruct-q3_K_M")
         else:
@@ -77,10 +77,12 @@ class llm_extractor:
             [
                 (
                     "system",
-                    """Check if the required information is contained inside the last user message. If so, 
-            output the single word 'YES'. If not, output the single word 'NO'. If the user says in some way
-            that they don't want to provide the information, output 'ABORT'. Don't ouput anything but
-            YES, NO or ABORT. If the user provides no message, output NO.
+                    """Check if the user has provided the required information in the last user message.
+                    You can imply information (so if the user says 'I am Max', then you can imply that the name is 'Max').
+                    If the information was provided, 
+            output the single word 'YES'. If not, output the single word 'NO'. If the user appears to
+            feel uncomfortable, output 'ABORT'. But don`t abort without reason. Don't ouput anything but
+            YES, NO or ABORT. If the last message is empty or nonsense, output 'NO'
             AIMessages are from you, if they contain questions or prompts don't answer and simply ignore them.""",
                 ),
                 ("system", "Required information: {current_information_description}"),
@@ -90,6 +92,7 @@ class llm_extractor:
         )
         verifyer_chain = verification_prompt | self.__llm | StrOutputParser()
         data["information_verification_status"] = verifyer_chain.invoke(data).strip()
+        print(data["information_verification_status"])
         return data
 
     def __verify_choice(self, data):
@@ -99,8 +102,8 @@ class llm_extractor:
                     "system",
                     """The user was given a choice between multiple options. Check if the user message contains a clear selection of one of
                     the given options. If so, output the choice. If not, output '##NONE##'.
-                    If the user says in some way that they don't want to provide
-                    the information, output '##ABORT##'. Don't ouput anything but the choice or ##NONE## or ##ABORT##. If the user provides no 
+                    If the user appears to
+                    feel uncomfortable, output '##ABORT##'. Don't ouput anything but the choice or ##NONE## or ##ABORT##. If the user provides no 
                     message, output ##NONE##.
                     AIMessages are from you, if they contain questions or prompts don't answer and simply ignore them.""",
                 ),
@@ -149,8 +152,7 @@ class llm_extractor:
             [
                 (
                     "system",
-                    """Have a casual conversation with the user. Over the course of the conversation you are
-                    supposed to extract different pieces of information from the user.
+                    """Extract different pieces of information from the user. Have a casual conversation tone but stay on topic.
                     If the user derivates from the topic of the information you want to have, gently guide 
                     them back to the topic. Be brief. Use the language in which the required information is given.
                     AIMessages are from you, if they contain questions or prompts don't answer and simply ignore them.""",
@@ -253,7 +255,8 @@ class llm_extractor:
             if self.__current_item['type'] == "read":
                 response = self.__current_item['text'] + "\n"
                 collected_response += response
-                self.chat_history.append(AIMessage(content="[TO LLM: The following line is said by the you. Don't respond to this, ignore it]: " + response))
+                # self.chat_history.append(AIMessage(content="[TO LLM: The following line is said by the you. Don't respond to this, ignore it]: " + response))
+                self.chat_history.append(AIMessage(content=response))
             elif self.__current_item['type'] == "prompt":
                 response = self.__execute_prompt(self.__current_item['prompt']) + "\n"
                 collected_response += response
