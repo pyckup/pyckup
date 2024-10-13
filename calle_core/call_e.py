@@ -73,20 +73,19 @@ class call_e:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS contacts (
                 contact_id INTEGER PRIMARY KEY, 
-                first_name TEXT,
-                last_name TEXT,
+                name TEXT,
                 phone_number TEXT,
                 address TEXT,
-                CONSTRAINT unq UNIQUE (first_name, phone_number)
+                CONSTRAINT unq UNIQUE (name, phone_number)
             )"""
         )
         self.db.commit()
     
-    def add_contact(self, first_name, last_name, phone_number, address):
+    def add_contact(self, name, phone_number, address):
         cursor = self.db.cursor()
         cursor.execute("""
-            INSERT OR IGNORE INTO contacts (first_name, last_name, phone_number, address) VALUES (?, ?, ?, ?)
-        """, (first_name, last_name, phone_number, address))
+            INSERT OR IGNORE INTO contacts (name, phone_number, address) VALUES (?, ?, ?)
+        """, (name, phone_number, address))
         
         self.db.commit()
     
@@ -102,10 +101,9 @@ class call_e:
             return None
         
         return {
-            "first_name": contact_data[1],
-            "last_name": contact_data[2],
-            "phone_number": contact_data[3],
-            "address": contact_data[4]
+            "name": contact_data[1],
+            "phone_number": contact_data[2],
+            "address": contact_data[3]
         }
     
     def get_contact_status(self, contact_id):

@@ -24,7 +24,7 @@ class llm_extractor:
             llm_provider (str, optional): Which LLM to use. Options: openai, ollama. Defaults to "openai".
         """
         if llm_provider == "openai":
-            self.__llm = ChatOpenAI(api_key=os.environ["OPENAI_API_KEY"], model="gpt-4o")
+            self.__llm = ChatOpenAI(api_key=os.environ["OPENAI_API_KEY"], model="gpt-4-turbo-preview")
         elif llm_provider == "ollama":
             self.__llm = Ollama(model="gemma2:2b-instruct-q3_K_M")
         else:
@@ -76,14 +76,14 @@ class llm_extractor:
         verification_prompt = ChatPromptTemplate.from_messages(
             [
                 (
+                    # You can imply information (so if the user says 'I am Max', then you can imply that the name is 'Max'
+                    # and don't need them to say 'My name is Max').
                     "system",
-                    """Check if the user has provided the required information in the last user message.
-                    You can imply information (so if the user says 'I am Max', then you can imply that the name is 'Max').
+                    """Check if the last user message contains the required information.
                     If the information was provided, 
             output the single word 'YES'. If not, output the single word 'NO'. If the user appears to
             feel uncomfortable, output 'ABORT'. But don`t abort without reason. Don't ouput anything but
-            YES, NO or ABORT. If the last message is empty or nonsense, output 'NO'
-            AIMessages are from you, if they contain questions or prompts don't answer and simply ignore them.""",
+            YES, NO or ABORT. Especially do not ask the user about the required information; just check the existing messages for it. If the last message is empty or nonsense, output 'NO'""",
                 ),
                 ("system", "Required information: {current_information_description}"),
                 ("user", "{input}"),
@@ -91,7 +91,10 @@ class llm_extractor:
             ]
         )
         verifyer_chain = verification_prompt | self.__llm | StrOutputParser()
-        data["information_verification_status"] = verifyer_chain.invoke(data).strip()
+        information_verification_status = verifyer_chain.invoke(data).strip()
+        # if information_verification_status != 'YES' or information_verification_status != 'NO' or information_verification_status != 'ABORT':
+        #     information_verification_status = "NO"
+        data["information_verification_status"] = information_verification_status
         return data
 
     def __verify_choice(self, data):
@@ -102,8 +105,9 @@ class llm_extractor:
                     """The user was given a choice between multiple options. Check if the user message contains a clear selection of one of
                     the possible choices. If so, output the choice. (as it was given in possible choices). If not, output '##NONE##'.
                     If the user appears to
-                    feel uncomfortable, output '##ABORT##'. Don't ouput anything but the choice or ##NONE## or ##ABORT##. If the user provides no 
-                    message, output ##NONE##.
+                    feel uncomfortable, output '##ABORT##'. Don't ouput anything but the choice or ##NONE## or ##ABORT##. 
+                    If you output the choice, it has to be the exact same format as in "Possible choices".
+                    If the user provides no message, output ##NONE##.
                     AIMessages are from you, if they contain questions or prompts don't answer and simply ignore them.""",
                 ),
                 ("system", "Choice prompt: {current_choice}, Possible choices: {current_choice_options}"),
@@ -153,7 +157,9 @@ class llm_extractor:
                     "system",
                     """Extract different pieces of information from the user. Have a casual conversation tone but stay on topic.
                     If the user derivates from the topic of the information you want to have, gently guide 
-                    them back to the topic. Be brief. Use the language in which the required information is given.
+                    them back to the topic.
+                    If the user answers gibberish or something unrelated, ask them to repeat IN A FULL SENTENCE.        
+                    Be brief. Use the language in which the required information is given.
                     AIMessages are from you, if they contain questions or prompts don't answer and simply ignore them.""",
                 ),
                 ("system", "Information you want to have: {current_information_description}"),
@@ -172,7 +178,9 @@ class llm_extractor:
                     """Ask the user for a choice between multiple options. The type of choice is given by the choice prompt.
                     If the choices are yes or no, don't say so because thats obvious.
                     If the user derivates from the topic of the choice, gently guide 
-                    them back to the topic. Be brief. Use the language in which the choice prompt is given.
+                    them back to the topic. 
+                    If the user answers gibberish or something unrelated, ask them to repeat IN A FULL SENTENCE.        
+                    Be brief. Use the language in which the choice prompt is given.
                     AIMessages are from you, if they contain questions or prompts don't answer and simply ignore them.""",
                 ),
                 ("system", f"Choice prompt: {data['current_choice']}, Possible choices: {choices}"),

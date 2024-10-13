@@ -19,10 +19,12 @@ HERE = Path(os.path.abspath(__file__)).parent
 class softphone_call(pj.Call):
 
     softphone = None
+    __is_paired = False
     
-    def __init__(self, acc, softphone, call_id = pj.PJSUA_INVALID_ID):   
+    def __init__(self, acc, softphone, call_id = pj.PJSUA_INVALID_ID, paired=False):   
         super(softphone_call, self).__init__(acc, call_id)
         self.softphone = softphone
+        self._is_paired = paired
 
 
     def onCallState(self, prm):
@@ -30,8 +32,8 @@ class softphone_call(pj.Call):
             return
         
         call_info = self.getInfo()
-        if call_info.state == pj.PJSIP_INV_STATE_DISCONNECTED:
-            self.softphone.hangup()
+        if call_info.state == pj.PJSIP_INV_STATE_DISCONNECTED or call_info.state == pj.PJSIP_INV_STATE_NULL:
+            self.softphone.hangup(paired_only=self.__is_paired)
         
         super(softphone_call, self).onCallState(prm)        
         
@@ -108,7 +110,12 @@ class softphone:
         artifacts = glob.glob(os.path.join(HERE / "../artifacts/", f'{self.__id}*'))
         for artifact in artifacts:
             if os.path.isfile(artifact):
-                os.remove(artifact)
+                try:
+                    os.remove(artifact)
+                except FileNotFoundError:
+                    print(f"File {artifact} not found. It might have been deleted already.")
+                except Exception as e:
+                    print(f"An error occurred while trying to delete the file {artifact}: {e}")
     
 
     
@@ -141,7 +148,7 @@ class softphone:
         sip_adress = "sip:" + phone_number + "@" + registrar
         
         # make call to forwarded number
-        self.__paired_call = softphone_call(self.__group.pjsua_account, self)
+        self.__paired_call = softphone_call(self.__group.pjsua_account, self, paired=True)
         call_op_param = pj.CallOpParam(True)
         self.__paired_call.makeCall(sip_adress, call_op_param)
         
@@ -216,24 +223,30 @@ class softphone:
         
         call_info = call.getInfo()
         while(call_info.state == pj.PJSIP_INV_STATE_CALLING or call_info.state == pj.PJSIP_INV_STATE_EARLY):
-            time.sleep(0.2)
-            if not call:
+            try:
+                time.sleep(0.2)
+                if not call:
+                    return
+                call_info = call.getInfo()
+            except Exception as e:
                 return
-            call_info = call.getInfo()
     
     def wait_for_stop_calling(self):
         self.__wait_for_stop_calling("active")
         
     
-    def hangup(self):
+    def hangup(self, paired_only = False):
+        if self.__paired_call:
+            self.__paired_call.hangup(pj.CallOpParam(True))
+            self.__paired_call = None
+        
+        if paired_only:
+            return
+            
         if self.active_call:
             self.active_call.hangup(pj.CallOpParam(True))
             self.active_call = None
         
-        if self.__paired_call:
-            self.__paired_call.hangup(pj.CallOpParam(True))
-            self.__paired_call = None
-
         self.__remove_artifacts()
                 
     def say(self, message):        
@@ -304,28 +317,32 @@ class softphone:
                                         buffer_0.setframerate(self.__config['tts_sample_rate'])
                                         buffer_0.writeframes(chunk)
                                         time.sleep(delay)
-                                        
-                        # play residue audio from last buffer                
-                        if buffer_switch:
-                            self.__media_player_2.stopTransmit(call_media)
-                            if self.__media_player_1:
-                                        self.__media_player_1.stopTransmit(call_media)
-                            self.__media_player_1 = pj.AudioMediaPlayer()  
-                            self.__media_player_1.createPlayer(str(HERE / f"../artifacts/{self.__id}_outgoing_buffer_0.wav"), pj.PJMEDIA_FILE_NO_LOOP)
-                            self.__media_player_1.startTransmit(call_media)
-                            time.sleep(delay)
-                        else:
-                            self.__media_player_1.stopTransmit(call_media)
-                            if self.__media_player_2:
-                                        self.__media_player_2.stopTransmit(call_media)
-                            self.__media_player_2 = pj.AudioMediaPlayer()  
-                            self.__media_player_2.createPlayer(str(HERE / f"../artifacts/{self.__id}_outgoing_buffer_1.wav"), pj.PJMEDIA_FILE_NO_LOOP)
-                            self.__media_player_2.startTransmit(call_media)  
-                            time.sleep(delay)
+                                
+                        time.sleep(delay)                
+                        # play residue audio from last buffer      
+                        # try:          
+                        #     if buffer_switch:
+                        #         self.__media_player_2.stopTransmit(call_media)
+                        #         if self.__media_player_1:
+                        #                     self.__media_player_1.stopTransmit(call_media)
+                        #         self.__media_player_1 = pj.AudioMediaPlayer()  
+                        #         self.__media_player_1.createPlayer(str(HERE / f"../artifacts/{self.__id}_outgoing_buffer_0.wav"), pj.PJMEDIA_FILE_NO_LOOP)
+                        #         self.__media_player_1.startTransmit(call_media)
+                        #         time.sleep(delay)
+                        #     else:
+                        #         self.__media_player_1.stopTransmit(call_media)
+                        #         if self.__media_player_2:
+                        #                     self.__media_player_2.stopTransmit(call_media)
+                        #         self.__media_player_2 = pj.AudioMediaPlayer()  
+                        #         self.__media_player_2.createPlayer(str(HERE / f"../artifacts/{self.__id}_outgoing_buffer_1.wav"), pj.PJMEDIA_FILE_NO_LOOP)
+                        #         self.__media_player_2.startTransmit(call_media)  
+                        #         time.sleep(delay)
+                        # except Exception as e:
+                        #     print('Error when playing residue audio buffer', e)
+                        #     traceback.print_exc()
                 except Exception as e:    
                     print('Error occured while speaking (probably because user hung up):', e)
-                    traceback.print_exc()
-                                   
+                    traceback.print_exc()                 
                 return
         print("No available audio media")
 
