@@ -1,6 +1,7 @@
 
 import os
 from pathlib import Path
+import traceback
 import yaml
 from calle_core.llm_extractor import llm_extractor, ExtractionStatus
 from calle_core.softphone import softphone, softphone_group
@@ -249,35 +250,40 @@ class call_e:
         # register thread
         sf_group.pjsua_endpoint.libRegisterThread('softphone_listen')
         
-        print("Listening...")
-        
-        while not sf.has_picked_up_call():
-            if not sf_group.is_listening:
-                return
-            pass
-        
-        print("Incoming call. Setting up extractor.")
+        try:
+            print("Listening...")
+            
+            while not sf.has_picked_up_call():
+                if not sf_group.is_listening:
+                    return
+                pass
+            
+            print("Incoming call. Setting up extractor.")
 
-        extractor = llm_extractor(outgoing_conversation_config, softphone=sf)
-        extractor_response = extractor.run_extraction_step("")
-        sf.say(extractor_response)
-        
-        while(extractor.get_status() == ExtractionStatus.IN_PROGRESS and sf.has_picked_up_call()):
-            user_input = sf.listen()
-            sf.play_audio(str(HERE / "../resources/processing.wav"))
-            extractor_response = extractor.run_extraction_step(user_input)
+            extractor = llm_extractor(outgoing_conversation_config, softphone=sf)
+            extractor_response = extractor.run_extraction_step("")
             sf.say(extractor_response)
             
-        if extractor.get_status() != ExtractionStatus.COMPLETED:
-            print("Extraction aborted")
-        else:
-            print("Extraction completed")
-        
-        # usually we would hang up here, but if the call is forwarded then should keep the connection open
-        while sf.is_forwarded():
-            time.sleep(1)
-        sf.hangup()
-        print("Call ended.")
+            while(extractor.get_status() == ExtractionStatus.IN_PROGRESS and sf.has_picked_up_call()):
+                user_input = sf.listen()
+                sf.play_audio(str(HERE / "../resources/processing.wav"))
+                extractor_response = extractor.run_extraction_step(user_input)
+                sf.say(extractor_response)
+                
+            if extractor.get_status() != ExtractionStatus.COMPLETED:
+                print("Extraction aborted")
+            else:
+                print("Extraction completed")
+            
+            # usually we would hang up here, but if the call is forwarded then should keep the connection open
+            while sf.is_forwarded():
+                time.sleep(1)
+            sf.hangup()
+            print("Call ended.")
+        except Exception as e:
+            print("Exception in listening thread:", e)
+            traceback.print_exc()
+            sf.hangup()
             
         listen_thread = threading.Thread(target=self.__softphone_listen, args=(sf, sf_group, outgoing_conversation_config))
         listen_thread.start()

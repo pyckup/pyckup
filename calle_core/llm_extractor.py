@@ -92,7 +92,6 @@ class llm_extractor:
         )
         verifyer_chain = verification_prompt | self.__llm | StrOutputParser()
         data["information_verification_status"] = verifyer_chain.invoke(data).strip()
-        print(data["information_verification_status"])
         return data
 
     def __verify_choice(self, data):
@@ -101,7 +100,7 @@ class llm_extractor:
                 (
                     "system",
                     """The user was given a choice between multiple options. Check if the user message contains a clear selection of one of
-                    the given options. If so, output the choice. If not, output '##NONE##'.
+                    the possible choices. If so, output the choice. (as it was given in possible choices). If not, output '##NONE##'.
                     If the user appears to
                     feel uncomfortable, output '##ABORT##'. Don't ouput anything but the choice or ##NONE## or ##ABORT##. If the user provides no 
                     message, output ##NONE##.

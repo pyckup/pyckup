@@ -12,6 +12,7 @@ import numpy as np
 import yaml
 import uuid
 import glob
+import traceback
 
 HERE = Path(os.path.abspath(__file__)).parent
 
@@ -149,6 +150,7 @@ class softphone:
         
         if not self.__has_picked_up_call("paired"):
             print("Call not picked up.")
+            self.__paired_call = None
             return False
         
         # connect audio medias of both calls
@@ -167,6 +169,7 @@ class softphone:
                 
         if not active_call_media or not paired_call_media:
             print("No audio media available.")
+            self.__paired_call = None
             return False
         
         if self.__media_player_1:
@@ -305,16 +308,23 @@ class softphone:
                         # play residue audio from last buffer                
                         if buffer_switch:
                             self.__media_player_2.stopTransmit(call_media)
+                            if self.__media_player_1:
+                                        self.__media_player_1.stopTransmit(call_media)
                             self.__media_player_1 = pj.AudioMediaPlayer()  
                             self.__media_player_1.createPlayer(str(HERE / f"../artifacts/{self.__id}_outgoing_buffer_0.wav"), pj.PJMEDIA_FILE_NO_LOOP)
                             self.__media_player_1.startTransmit(call_media)
+                            time.sleep(delay)
                         else:
                             self.__media_player_1.stopTransmit(call_media)
+                            if self.__media_player_2:
+                                        self.__media_player_2.stopTransmit(call_media)
                             self.__media_player_2 = pj.AudioMediaPlayer()  
                             self.__media_player_2.createPlayer(str(HERE / f"../artifacts/{self.__id}_outgoing_buffer_1.wav"), pj.PJMEDIA_FILE_NO_LOOP)
                             self.__media_player_2.startTransmit(call_media)  
-                except:    
-                    print('Error occured while speaking (probably because user hung up)')
+                            time.sleep(delay)
+                except Exception as e:    
+                    print('Error occured while speaking (probably because user hung up):', e)
+                    traceback.print_exc()
                                    
                 return
         print("No available audio media")
