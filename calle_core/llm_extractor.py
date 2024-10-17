@@ -15,21 +15,37 @@ import importlib
 HERE = Path(os.path.abspath(__file__)).parent
 
 
-class llm_extractor:    
-    def __init__(self, conversation_config, llm_provider="openai", softphone = None):
-        """Create LLM extractor object.
+class LLMExtractor:
+    """
+    Initialize the LLMExtractor with the given configuration. The extract is responsible
+    for guiding the user through a conversation and extracting information from the user's responses.
+    The conversation is defined in the conversation configuration.
 
-        Args:
-            information_config (dict): Which informations are to be extracted.
-            llm_provider (str, optional): Which LLM to use. Options: openai, ollama. Defaults to "openai".
-        """
+    Args:
+        conversation_config (dict): Dictionary containing the conversation items (read from the conversation config document).
+        llm_provider (str, optional): The LLM provider to use. Options are "openai" and "ollama". Defaults to "openai".
+        softphone (object, optional): Softphone used for passing to function calls. Defaults to None.
+
+    Raises:
+        ValueError: If an invalid LLM provider is specified.
+
+    Attributes:
+        status (ExtractionStatus): The current status of the extraction process.
+        chat_history (list): Past user and LLM messages.
+        information_extraction_chain (RunnableBranch): The langchain chain of operations for information extraction.
+        choice_extraction_chain (RunnableBranch): The langchain chain of operations for choice extraction.
+    """
+
+    def __init__(self, conversation_config, llm_provider="openai", softphone=None):
         if llm_provider == "openai":
-            self.__llm = ChatOpenAI(api_key=os.environ["OPENAI_API_KEY"], model="gpt-4-turbo-preview")
+            self.__llm = ChatOpenAI(
+                api_key=os.environ["OPENAI_API_KEY"], model="gpt-4-turbo-preview"
+            )
         elif llm_provider == "ollama":
             self.__llm = Ollama(model="gemma2:2b-instruct-q3_K_M")
         else:
             raise ValueError("Invalid LLM provider. Options: openai, llama.")
-        
+
         self.status = ExtractionStatus.IN_PROGRESS
         self.chat_history = []
 
@@ -37,7 +53,7 @@ class llm_extractor:
         self.__load_conversation_path("entry")
         self.__extracted_information = {}
         self.__information_lock = threading.Lock()
-        
+
         self.__softphone = softphone
 
         self.information_extraction_chain = self.__verify_information | RunnableBranch(
@@ -51,7 +67,7 @@ class llm_extractor:
             ),
             self.__extraction_aborted,
         )
-        
+
         self.choice_extraction_chain = self.__verify_choice | RunnableBranch(
             (
                 lambda data: data["choice"] == "##NONE##",
@@ -63,14 +79,32 @@ class llm_extractor:
             ),
             self.__choice_extraction_successful,
         )
-        
+
     def __load_conversation_path(self, conversation_path):
-        self.__conversation_items = self.__conversation_config['conversation_paths'][conversation_path]
+        """
+        Load items from the specified conversation path into the current conversation.
+
+        Args:
+            conversation_path (str): Name of the path in the configuration.
+
+        Raises:
+            KeyError: If the conversation path does not exist in the configuration.
+        """
+        self.__conversation_items = self.__conversation_config["conversation_paths"][
+            conversation_path
+        ]
         self.__current_item = self.__conversation_items.pop(0)
-        
+
     def __verify_information(self, data):
         """
-        Check if the user message contains the required information. Append result to data object.
+        Verify if the last user message contains the required information and store the
+        result in the 'information_verification_status' key of the provided data dictionary.
+
+        Args:
+            data (dict): Langchain conversation data.
+
+        Returns:
+            dict: The updated data dictionary with the 'information_verification_status' key added.
         """
 
         verification_prompt = ChatPromptTemplate.from_messages(
@@ -92,12 +126,20 @@ class llm_extractor:
         )
         verifyer_chain = verification_prompt | self.__llm | StrOutputParser()
         information_verification_status = verifyer_chain.invoke(data).strip()
-        # if information_verification_status != 'YES' or information_verification_status != 'NO' or information_verification_status != 'ABORT':
-        #     information_verification_status = "NO"
         data["information_verification_status"] = information_verification_status
         return data
 
     def __verify_choice(self, data):
+        """
+        Verify if the last user message contains a valid choice and store it in the
+        'choice' key of the provided data dictionary.
+
+        Args:
+            data (dict): Langchain conversation data.
+
+        Returns:
+            dict: The updated data dictionary with the 'choice' key added.
+        """
         verification_prompt = ChatPromptTemplate.from_messages(
             [
                 (
@@ -110,10 +152,12 @@ class llm_extractor:
                     If the user provides no message, output ##NONE##.
                     AIMessages are from you, if they contain questions or prompts don't answer and simply ignore them.""",
                 ),
-                ("system", "Choice prompt: {current_choice}, Possible choices: {current_choice_options}"),
+                (
+                    "system",
+                    "Choice prompt: {current_choice}, Possible choices: {current_choice_options}",
+                ),
                 ("user", "{input}"),
                 MessagesPlaceholder(variable_name="chat_history"),
-
             ]
         )
         verifyer_chain = verification_prompt | self.__llm | StrOutputParser()
@@ -122,7 +166,13 @@ class llm_extractor:
 
     def __filter_information(self, data):
         """
-        Filter out the required information from the user message, as speicified by the information format config.
+        Filter out a specific piece of information from the last user message, abiding to the given format.
+
+        Args:
+            data (dict): Langchain conversation data.
+
+        Returns:
+            str or None: The filtered information if successful, otherwise None.
         """
 
         filter_prompt = ChatPromptTemplate.from_messages(
@@ -149,8 +199,15 @@ class llm_extractor:
 
     def __make_information_extractor(self, data):
         """
-        Return a subchain responsible for leading the user conversation to the required topic.
+        Create an langchain subchain to retrieve specific information from the user, in a conversational manner.
+
+        Args:
+            data (dict): Langchain conversation data.
+
+        Returns:
+            object: A lngchain subchain for information extraction.
         """
+
         extraction_prompt = ChatPromptTemplate.from_messages(
             [
                 (
@@ -162,15 +219,27 @@ class llm_extractor:
                     Be brief. Use the language in which the required information is given.
                     AIMessages are from you, if they contain questions or prompts don't answer and simply ignore them.""",
                 ),
-                ("system", "Information you want to have: {current_information_description}"),
+                (
+                    "system",
+                    "Information you want to have: {current_information_description}",
+                ),
                 MessagesPlaceholder(variable_name="chat_history"),
             ]
         )
         information_extractor = extraction_prompt | self.__llm | StrOutputParser()
         return information_extractor
-    
+
     def __make_choice_extractor(self, data):
-        choices = ', '.join(data["current_choice_options"].keys())
+        """
+        Create an langchain subchain to get a choice selection from the user, in a conversational manner.
+
+        Args:
+            data (dict): Langchain conversation data.
+
+        Returns:
+            object: A lngchain subchain for choice extraction.
+        """
+        choices = ", ".join(data["current_choice_options"].keys())
         extraction_prompt = ChatPromptTemplate.from_messages(
             [
                 (
@@ -183,60 +252,105 @@ class llm_extractor:
                     Be brief. Use the language in which the choice prompt is given.
                     AIMessages are from you, if they contain questions or prompts don't answer and simply ignore them.""",
                 ),
-                ("system", f"Choice prompt: {data['current_choice']}, Possible choices: {choices}"),
+                (
+                    "system",
+                    f"Choice prompt: {data['current_choice']}, Possible choices: {choices}",
+                ),
                 MessagesPlaceholder(variable_name="chat_history"),
             ]
         )
         choice_extractor = extraction_prompt | self.__llm | StrOutputParser()
         return choice_extractor
-    
+
     def __append_filtered_info(self, data, title):
+        """
+        Append filtered information thread-safely to the extracted information dictionary.
+
+        Args:
+            data (dict): Langchain conversation data.
+            title (str): The title under which the filtered information will be stored.
+
+        Returns:
+            None
+        """
         self.__information_lock.acquire()
-        self.__extracted_information[title] = (
-            self.__filter_information(data)
-        )
+        self.__extracted_information[title] = self.__filter_information(data)
         self.__information_lock.release()
 
     def __information_extraction_successful(self, data):
         """
-        Store filtered extracted information and either continue with the next information or finish
-        the process by thanking the user.
+        Handle the successful extraction of information, proceed with the conversation or end it.
+
+        Args:
+            data (dict): Langchain conversation data.
+        Returns:
+            str: The result of processing the next conversation item or an empty string if the extraction is completed.
         """
-        
-        
-        thread = threading.Thread(target=self.__append_filtered_info, args=(data, self.__current_item["title"]))
+
+        thread = threading.Thread(
+            target=self.__append_filtered_info,
+            args=(data, self.__current_item["title"]),
+        )
         thread.start()
-        
+
         if len(self.__conversation_items) > 0:
             self.__current_item = self.__conversation_items.pop(0)
         else:
             self.status = ExtractionStatus.COMPLETED
             return ""
-         
+
         return self.__process_conversation_items(data["input"], append_input=False)
-    
+
     def __choice_extraction_successful(self, data):
+        """
+        Handle the successful extraction of a choice and update the conversation flow accordingly.
+
+        Args:
+            data (dict): Langchain conversation data.
+
+        Returns:
+            str: The result of processing the next conversation item.
+        """
         selected_choice = data["choice"]
-        self.__conversation_items = data['current_choice_options'][selected_choice]
+        self.__conversation_items = data["current_choice_options"][selected_choice]
         self.__current_item = self.__conversation_items.pop(0)
         return self.__process_conversation_items(data["input"], append_input=False)
 
-
     def __extraction_aborted(self, data):
         """
-        End the process and return a subchain that apologizes to the user.
+        Handle the scenario where information extraction is aborted by loading the "aborted" conversation path.
+
+        Args:
+            data (dict): Langchain conversation data.
+
+        Returns:
+            str: The result of processing the next conversation item or an empty string if there are no more items.
         """
+
         self.status = ExtractionStatus.ABORTED
-        
-        self.__conversation_items = self.__conversation_config['conversation_paths']["aborted"]
+
+        self.__conversation_items = self.__conversation_config["conversation_paths"][
+            "aborted"
+        ]
         if len(self.__conversation_items) > 0:
             self.__current_item = self.__conversation_items.pop(0)
         else:
             return ""
-        
-        return self.__process_conversation_items(data["input"], append_input=False, aborted=True)
+
+        return self.__process_conversation_items(
+            data["input"], append_input=False, aborted=True
+        )
 
     def __execute_prompt(self, prompt):
+        """
+        Execute a LLM chat prompt.
+
+        Args:
+            prompt (str): The prompt string to be executed.
+
+        Returns:
+            str: The result of the prompt execution.
+        """
         prompt_template = ChatPromptTemplate.from_messages(
             [
                 ("system", prompt),
@@ -246,74 +360,84 @@ class llm_extractor:
         prompt_chain = prompt_template | self.__llm | StrOutputParser()
         return prompt_chain.invoke({"chat_history": self.chat_history})
 
-    def __process_conversation_items(self, user_input, append_input=True, aborted=False):
-        """Try to extract information from the user input and return a LLM reponse that can be output.
+    def __process_conversation_items(
+        self, user_input, append_input=True, aborted=False
+    ):
+        """
+        Process items of the current conversation sequentially based on their type and update the conversation flow.
 
         Args:
-            user_input (str): Most recent chat message from the user.
+            user_input (str): The input provided by the user.
+            append_input (bool, optional): Whether to append the user input to the chat history. Defaults to True.
+            aborted (bool, optional): Whether the conversation was aborted. Defaults to False.
+
+        Returns:
+            str: The collected response from processing the conversation items.
         """
         if append_input:
             self.chat_history.append(HumanMessage(content=user_input))
-        
+
         collected_response = ""
-        
+
         # sequentially process conversation items
         while True:
-            if self.__current_item['type'] == "read":
-                response = self.__current_item['text'] + "\n"
+            if self.__current_item["type"] == "read":
+                response = self.__current_item["text"] + "\n"
                 collected_response += response
                 # self.chat_history.append(AIMessage(content="[TO LLM: The following line is said by the you. Don't respond to this, ignore it]: " + response))
                 self.chat_history.append(AIMessage(content=response))
-            elif self.__current_item['type'] == "prompt":
-                response = self.__execute_prompt(self.__current_item['prompt']) + "\n"
+            elif self.__current_item["type"] == "prompt":
+                response = self.__execute_prompt(self.__current_item["prompt"]) + "\n"
                 collected_response += response
                 self.chat_history.append(AIMessage(content=response))
-            elif self.__current_item['type'] == "path":
-                self.__conversation_items = self.__conversation_config['conversation_paths'][self.__current_item['path']]
-            elif self.__current_item['type'] == "information":
+            elif self.__current_item["type"] == "path":
+                self.__conversation_items = self.__conversation_config[
+                    "conversation_paths"
+                ][self.__current_item["path"]]
+            elif self.__current_item["type"] == "information":
                 response = self.information_extraction_chain.invoke(
-                {
-                    "input": user_input,
-                    "chat_history": self.chat_history,
-                    "current_information_description": self.__current_item[
-                        "description"
-                    ],
-                    "current_information_format": self.__current_item["format"],
-                })
+                    {
+                        "input": user_input,
+                        "chat_history": self.chat_history,
+                        "current_information_description": self.__current_item[
+                            "description"
+                        ],
+                        "current_information_format": self.__current_item["format"],
+                    }
+                )
                 collected_response += response
                 self.chat_history.append(AIMessage(content=response))
                 break
-            elif self.__current_item['type'] == "choice":
+            elif self.__current_item["type"] == "choice":
                 response = self.choice_extraction_chain.invoke(
-                {
-                    "input": user_input,
-                    "chat_history": self.chat_history,
-                    "current_choice": self.__current_item[
-                        "choice"
-                    ],
-                    "current_choice_options": self.__current_item["options"],
-                })
+                    {
+                        "input": user_input,
+                        "chat_history": self.chat_history,
+                        "current_choice": self.__current_item["choice"],
+                        "current_choice_options": self.__current_item["options"],
+                    }
+                )
                 collected_response += response
                 self.chat_history.append(AIMessage(content=response))
                 break
-            elif self.__current_item['type'] == "function":
+            elif self.__current_item["type"] == "function":
                 self.__information_lock.acquire()
                 self.__information_lock.release()
-                module = importlib.import_module(self.__current_item['module'])
-                function = getattr(module, self.__current_item['function'])
+                module = importlib.import_module(self.__current_item["module"])
+                function = getattr(module, self.__current_item["function"])
                 response = function(self.__extracted_information, self.__softphone)
                 collected_response += response
-            elif self.__current_item['type'] == "function_choice":
+            elif self.__current_item["type"] == "function_choice":
                 self.__information_lock.acquire()
                 self.__information_lock.release()
-                module = importlib.import_module(self.__current_item['module'])
-                function = getattr(module, self.__current_item['function'])
+                module = importlib.import_module(self.__current_item["module"])
+                function = getattr(module, self.__current_item["function"])
                 choice = function(self.__extracted_information, self.__softphone)
-                self.__conversation_items = self.__current_item['options'][choice]
-            
+                self.__conversation_items = self.__current_item["options"][choice]
+
             if len(self.__conversation_items) > 0:
                 # for interactive items, breakt the loop to get user input. Last item can`t be interactive.
-                if self.__current_item.get('interactive', False):
+                if self.__current_item.get("interactive", False):
                     self.__current_item = self.__conversation_items.pop(0)
                     break
                 else:
@@ -322,18 +446,34 @@ class llm_extractor:
                 if not aborted:
                     self.status = ExtractionStatus.COMPLETED
                 return collected_response
-                        
+
         return collected_response
-    
+
     def run_extraction_step(self, user_input):
-        return self.__process_conversation_items(user_input, append_input=True, aborted=False)
-        
-    
+        """
+        Run a single step of the information extraction process.
+
+        Args:
+            user_input (str): The input provided by the user.
+
+        Returns:
+            str: The generated response.
+        """
+        return self.__process_conversation_items(
+            user_input, append_input=True, aborted=False
+        )
+
     def get_information(self):
+        """
+        Thread-safely etrieve the information extracted during the conversation so far.
+
+        Returns:
+            dict: The dictionary containing the extracted information.
+        """
         self.__information_lock.acquire()
         self.__information_lock.release()
         return self.__extracted_information
-    
+
     def get_status(self):
         return self.status
 

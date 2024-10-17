@@ -6,7 +6,6 @@ import time
 import wave
 from openai import OpenAI
 import pjsua2 as pj
-# import pyttsx3
 from pydub import AudioSegment
 import numpy as np
 import yaml
@@ -16,213 +15,304 @@ import traceback
 
 HERE = Path(os.path.abspath(__file__)).parent
 
-class softphone_call(pj.Call):
+
+class SoftphoneCall(pj.Call):
 
     softphone = None
     __is_paired = False
-    
-    def __init__(self, acc, softphone, call_id = pj.PJSUA_INVALID_ID, paired=False):   
-        super(softphone_call, self).__init__(acc, call_id)
+
+    def __init__(self, acc, softphone, call_id=pj.PJSUA_INVALID_ID, paired=False):
+        """
+        Initialize a SoftphoneCall instance, inheriting PJSUA2's Call class.
+
+        Args:
+            acc (Account): The SIP account associated with the call.
+            softphone (Softphone): The softphone instance managing the call.
+            call_id (int, optional): The ID of the call. Defaults to pj.PJSUA_INVALID_ID.
+            paired (bool, optional): Whether the call is paired. Defaults to False.
+        """
+        super(SoftphoneCall, self).__init__(acc, call_id)
         self.softphone = softphone
         self._is_paired = paired
-
 
     def onCallState(self, prm):
         if not self.softphone:
             return
-        
+
+        # hang up the softphone after the call is no longer active
         call_info = self.getInfo()
-        if call_info.state == pj.PJSIP_INV_STATE_DISCONNECTED or call_info.state == pj.PJSIP_INV_STATE_NULL:
+        if (
+            call_info.state == pj.PJSIP_INV_STATE_DISCONNECTED
+            or call_info.state == pj.PJSIP_INV_STATE_NULL
+        ):
             self.softphone.hangup(paired_only=self.__is_paired)
-        
-        super(softphone_call, self).onCallState(prm)        
-        
-class group_account(pj.Account):
+
+        super(SoftphoneCall, self).onCallState(prm)
+
+
+class GroupAccount(pj.Account):
+    """
+    Initialize a GroupAccount instance, inheriting PJSUA2's Account class. All softphones associated
+    with the same group are going to share this SIP account.
+    Args:
+        group (SoftphoneGroup): The softphone group associated with this account.
+    """
+
     def __init__(self, group):
         self.__group = group
-        super(group_account, self).__init__()
+        super(GroupAccount, self).__init__()
 
-        
     def onIncomingCall(self, prm):
+        # try to answer call using one of the available group softphones
         for phone in self.__group.softphones:
             if phone.active_call:
                 continue
-            
-            call = softphone_call(self, phone, prm.callId)
-            
+
+            call = SoftphoneCall(self, phone, prm.callId)
+
             call_op_param = pj.CallOpParam()
             call_op_param.statusCode = pj.PJSIP_SC_OK
             call.answer(call_op_param)
             phone.active_call = call
             return
-                    
-        # no available phone found
-        call = softphone_call(self, None, prm.callId)
+
+        # no available phone found, hangup
+        call = SoftphoneCall(self, None, prm.callId)
         call_op_param = pj.CallOpParam(True)
         call.hangup(call_op_param)
-          
 
-class softphone:
+
+class Softphone:
     __config = None
     __id = None
-    
+
     __group = None
     active_call = None
     __paired_call = None
-    
+
     __tts_engine = None
     __media_player_1 = None
     __media_player_2 = None
     __media_recorder = None
-    
+
     __openai_client = None
-    
-    
-    def __init__(self, credentials_path, group = None):
+
+    def __init__(self, credentials_path, group=None):
+        """
+        Initialize a Softphone instance with the provided SIP credentials and softphone group. Used to make
+        and answer calls and perform various call actions (e.g. hangup, forward, say, play_audio, listen).
+
+        Args:
+            credentials_path (str): The file path to the SIP credentials.
+            group (SoftphoneGroup, optional): The group to which the softphone belongs. If None, a new group is created, containing just this softphone.
+
+        Returns:
+            None
+        """
         # Load config
-        with open(HERE / '../conf/softphone_config.yaml', 'r') as config_file:
+        with open(HERE / "../conf/softphone_config.yaml", "r") as config_file:
             self.__config = yaml.safe_load(config_file)
-        
+
         if group:
             self.__group = group
         else:
-            self.__group = softphone_group(credentials_path)
+            self.__group = SoftphoneGroup(credentials_path)
         self.__group.add_phone(self)
-        
+
         self.__id = uuid.uuid4()
         self.__paired_call = None
-        
-        # self.__tts_engine = pyttsx3.init()
+
         self.__media_player_1 = None
         self.__media_player_2 = None
         self.__media_recorder = None
-        
+
         # Initialize OpenAI
         self.__openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-        
+
     def __del__(self):
         self.__media_player_1 = None
         self.__media_player_2 = None
         self.__media_recorder = None
         self.__group.remove_phone(self)
-        
+
     def __remove_artifacts(self):
-        artifacts = glob.glob(os.path.join(HERE / "../artifacts/", f'{self.__id}*'))
+        """
+        Remove artifacts (mostly incoming and outgoing audio files) associated with the current softphone instance.
+
+        Returns:
+            None
+        """
+        artifacts = glob.glob(os.path.join(HERE / "../artifacts/", f"{self.__id}*"))
         for artifact in artifacts:
             if os.path.isfile(artifact):
                 try:
                     os.remove(artifact)
                 except FileNotFoundError:
-                    print(f"File {artifact} not found. It might have been deleted already.")
+                    print(
+                        f"File {artifact} not found. It might have been deleted already."
+                    )
                 except Exception as e:
-                    print(f"An error occurred while trying to delete the file {artifact}: {e}")
-    
+                    print(
+                        f"An error occurred while trying to delete the file {artifact}: {e}"
+                    )
 
-    
-    def call(self, phone_number): 
+    def call(self, phone_number):
+        """
+        Initiate a call to the specified phone number.
+
+        Args:
+            phone_number (str): The phone number to call in E.164 format.
+
+        Returns:
+            None
+        """
         if self.active_call:
             print("Can't call: There is a call already in progress.")
-        
+
         # construct SIP adress
-        registrar = self.__group.sip_credentials['registrarUri'].split(':')[1]
+        registrar = self.__group.sip_credentials["registrarUri"].split(":")[1]
         sip_adress = "sip:" + phone_number + "@" + registrar
-        
+
         # make call
-        self.active_call = softphone_call(self.__group.pjsua_account, self)
+        self.active_call = SoftphoneCall(self.__group.pjsua_account, self)
         call_op_param = pj.CallOpParam(True)
         self.active_call.makeCall(sip_adress, call_op_param)
-    
+
     def forward_call(self, phone_number):
+        """
+        Attempt to forward the current call to a specified phone number. A seperate call will be made and the
+        two calls will be connected.
+
+        Args:
+            phone_number (str): The phone number to forward the call to in E.164 format.
+
+        Returns:
+            bool: True if the call was successfully forwarded, False otherwise.
+        """
         if not self.active_call:
             print("Can't forward call: No call in progress.")
             return False
-            
+
         if self.__paired_call:
             print("Can't forward call: Already in forwarding session.")
             return False
-            
+
         print("Forwarding call...")
-        
+
         # construct SIP adress
-        registrar = self.__group.sip_credentials['registrarUri'].split(':')[1]
+        registrar = self.__group.sip_credentials["registrarUri"].split(":")[1]
         sip_adress = "sip:" + phone_number + "@" + registrar
-        
+
         # make call to forwarded number
-        self.__paired_call = softphone_call(self.__group.pjsua_account, self, paired=True)
+        self.__paired_call = SoftphoneCall(
+            self.__group.pjsua_account, self, paired=True
+        )
         call_op_param = pj.CallOpParam(True)
         self.__paired_call.makeCall(sip_adress, call_op_param)
-        
+
         # wait for pick up
         self.__wait_for_stop_calling("paired")
-        
+
         if not self.__has_picked_up_call("paired"):
             print("Call not picked up.")
             self.__paired_call = None
             return False
-        
+
         # connect audio medias of both calls
         active_call_media = None
         paired_call_media = None
-        
+
         active_call_info = self.active_call.getInfo()
         for i in range(len(active_call_info.media)):
-            if active_call_info.media[i].type == pj.PJMEDIA_TYPE_AUDIO: #and active_call_info.media[i].status == pj.PJSUA_CALL_MEDIA_ACTIVE:
+            if (
+                active_call_info.media[i].type == pj.PJMEDIA_TYPE_AUDIO
+            ):  # and active_call_info.media[i].status == pj.PJSUA_CALL_MEDIA_ACTIVE:
                 active_call_media = self.active_call.getAudioMedia(i)
-        
+
         paired_call_info = self.__paired_call.getInfo()
         for i in range(len(paired_call_info.media)):
-            if paired_call_info.media[i].type == pj.PJMEDIA_TYPE_AUDIO: #and paired_call_info.media[i].status == pj.PJSUA_CALL_MEDIA_ACTIVE:
+            if (
+                paired_call_info.media[i].type == pj.PJMEDIA_TYPE_AUDIO
+            ):  # and paired_call_info.media[i].status == pj.PJSUA_CALL_MEDIA_ACTIVE:
                 paired_call_media = self.__paired_call.getAudioMedia(i)
-                
+
         if not active_call_media or not paired_call_media:
             print("No audio media available.")
             self.__paired_call = None
             return False
-        
+
         if self.__media_player_1:
             self.__media_player_1.stopTransmit(active_call_media)
         if self.__media_player_2:
             self.__media_player_2.stopTransmit(active_call_media)
         active_call_media.startTransmit(paired_call_media)
         paired_call_media.startTransmit(active_call_media)
-        
+
         return True
-    
+
     def is_forwarded(self):
         return self.__paired_call is not None
-    
+
     def __has_picked_up_call(self, call_type="active"):
+        """
+        Check if the specified call (active call or paired call) has been picked up.
+
+        Args:
+            call_type (str, optional): The type of call to check. Can be "active" or "paired". Defaults to "active".
+
+        Returns:
+            bool: True if the specified call has been successfully picked up, otherwise False.
+        """
         if call_type == "active":
             call = self.active_call
         elif call_type == "paired":
             call = self.__paired_call
         else:
             return False
-        
+
         if call:
             call_info = call.getInfo()
             for i in range(call_info.media.size()):
-                if (call_info.media[i].type==pj.PJMEDIA_TYPE_AUDIO and call.getMedia(i)):
+                if call_info.media[i].type == pj.PJMEDIA_TYPE_AUDIO and call.getMedia(
+                    i
+                ):
                     return True
         return False
-        
-        
+
     def has_picked_up_call(self):
+        """
+        Check if the active call has been picked up.
+
+        Returns:
+            bool: True if the active call has been picked up, otherwise False.
+        """
         return self.__has_picked_up_call("active")
-        
+
     def __wait_for_stop_calling(self, call_type="active"):
+        """
+        Wait for the specified call (active call or paired call) to stop ringing. Holds program execution.
+
+        Args:
+            call_type (str, optional): The type of call to check. Can be "active" or "paired". Defaults to "active".
+
+        Returns:
+            None
+        """
         if call_type == "active":
             call = self.active_call
         elif call_type == "paired":
             call = self.__paired_call
         else:
             return
-            
+
         if not call:
             return
-        
+
         call_info = call.getInfo()
-        while(call_info.state == pj.PJSIP_INV_STATE_CALLING or call_info.state == pj.PJSIP_INV_STATE_EARLY):
+        while (
+            call_info.state == pj.PJSIP_INV_STATE_CALLING
+            or call_info.state == pj.PJSIP_INV_STATE_EARLY
+        ):
             try:
                 time.sleep(0.2)
                 if not call:
@@ -230,102 +320,177 @@ class softphone:
                 call_info = call.getInfo()
             except Exception as e:
                 return
-    
+
     def wait_for_stop_calling(self):
+        """
+        Wait for the active call to stop ringing. Holds program execution.
+
+        Returns:
+            None
+        """
         self.__wait_for_stop_calling("active")
-        
-    
-    def hangup(self, paired_only = False):
+
+    def hangup(self, paired_only=False):
+        """
+        Hang up the current call(s) and clean up artifacts.
+
+        Args:
+            paired_only (bool, optional): If True, only the paired call is hung up. If False,
+            both active and paired call are hung up. Defaults to False.
+
+        Returns:
+            None
+        """
         if self.__paired_call:
             self.__paired_call.hangup(pj.CallOpParam(True))
             self.__paired_call = None
-        
+
         if paired_only:
             return
-            
+
         if self.active_call:
             self.active_call.hangup(pj.CallOpParam(True))
             self.active_call = None
-        
+
         self.__remove_artifacts()
-                
-    def say(self, message):        
+
+    def say(self, message):
+        """
+        Read out a message as audio to the active call.
+
+        Args:
+            message (str): The message to be converted to speech and streamed to the call.
+
+        Returns:
+            None
+        """
         if not self.active_call:
             print("Can't say: No call in progress.")
             return
         if self.__paired_call:
             print("Can't say: Call is in forwarding session.")
             return
-                
+
         call_info = self.active_call.getInfo()
         for i in range(len(call_info.media)):
-            if call_info.media[i].type == pj.PJMEDIA_TYPE_AUDIO and call_info.media[i].status == pj.PJSUA_CALL_MEDIA_ACTIVE:
+            if (
+                call_info.media[i].type == pj.PJMEDIA_TYPE_AUDIO
+                and call_info.media[i].status == pj.PJSUA_CALL_MEDIA_ACTIVE
+            ):
                 call_media = self.active_call.getAudioMedia(i)
-                
+
                 # -- Recieve TTS audio from OpenAI and stream it using double buffering --
                 # Setup buffer files
                 try:
                     silence = np.zeros(1024, dtype=np.int16).tobytes()
-                    with wave.open(str(HERE / f"../artifacts/{self.__id}_outgoing_buffer_0.wav"), 'wb') as buffer_0:
-                        buffer_0.setnchannels(self.__config['tts_channels']) 
-                        buffer_0.setsampwidth(self.__config['tts_sample_width'])  
-                        buffer_0.setframerate(self.__config['tts_sample_rate'])
+                    with wave.open(
+                        str(HERE / f"../artifacts/{self.__id}_outgoing_buffer_0.wav"),
+                        "wb",
+                    ) as buffer_0:
+                        buffer_0.setnchannels(self.__config["tts_channels"])
+                        buffer_0.setsampwidth(self.__config["tts_sample_width"])
+                        buffer_0.setframerate(self.__config["tts_sample_rate"])
                         buffer_0.writeframes(silence)
-                    
-                    with wave.open(str(HERE / f"../artifacts/{self.__id}_outgoing_buffer_1.wav"), 'wb') as buffer_1:
-                        buffer_1.setnchannels(self.__config['tts_channels']) 
-                        buffer_1.setsampwidth(self.__config['tts_sample_width'])  
-                        buffer_1.setframerate(self.__config['tts_sample_rate'])
+
+                    with wave.open(
+                        str(HERE / f"../artifacts/{self.__id}_outgoing_buffer_1.wav"),
+                        "wb",
+                    ) as buffer_1:
+                        buffer_1.setnchannels(self.__config["tts_channels"])
+                        buffer_1.setsampwidth(self.__config["tts_sample_width"])
+                        buffer_1.setframerate(self.__config["tts_sample_rate"])
                         buffer_1.writeframes(silence)
-                    
+
                     # stream and play response to/from alternating buffer
-                    delay = self.__config['tts_chunk_size'] / (self.__config['tts_sample_rate'] * self.__config['tts_sample_width'] * self.__config['tts_channels']) # length of each chunk in seconds
+                    delay = self.__config["tts_chunk_size"] / (
+                        self.__config["tts_sample_rate"]
+                        * self.__config["tts_sample_width"]
+                        * self.__config["tts_channels"]
+                    )  # length of each chunk in seconds
 
                     with self.__openai_client.audio.speech.with_streaming_response.create(
-                    model="tts-1",
-                    voice="alloy",
-                    input=message,
-                    response_format="pcm",
-                    ) as response:   
+                        model="tts-1",
+                        voice="alloy",
+                        input=message,
+                        response_format="pcm",
+                    ) as response:
                         buffer_switch = True
-                        for chunk in response.iter_bytes(chunk_size=self.__config['tts_chunk_size']):
-                            if chunk and len(chunk) >=512: 
+                        for chunk in response.iter_bytes(
+                            chunk_size=self.__config["tts_chunk_size"]
+                        ):
+                            if chunk and len(chunk) >= 512:
                                 if buffer_switch:
                                     buffer_switch = False
                                     if self.__media_player_2:
                                         self.__media_player_2.stopTransmit(call_media)
-                                    self.__media_player_1 = pj.AudioMediaPlayer()  
-                                    self.__media_player_1.createPlayer(str(HERE / f"../artifacts/{self.__id}_outgoing_buffer_0.wav"), pj.PJMEDIA_FILE_NO_LOOP)
+                                    self.__media_player_1 = pj.AudioMediaPlayer()
+                                    self.__media_player_1.createPlayer(
+                                        str(
+                                            HERE
+                                            / f"../artifacts/{self.__id}_outgoing_buffer_0.wav"
+                                        ),
+                                        pj.PJMEDIA_FILE_NO_LOOP,
+                                    )
                                     self.__media_player_1.startTransmit(call_media)
 
-                                    with wave.open(str(HERE / f"../artifacts/{self.__id}_outgoing_buffer_1.wav"), 'wb') as buffer_1: 
-                                        buffer_1.setnchannels(self.__config['tts_channels']) 
-                                        buffer_1.setsampwidth(self.__config['tts_sample_width'])  
-                                        buffer_1.setframerate(self.__config['tts_sample_rate'])
+                                    with wave.open(
+                                        str(
+                                            HERE
+                                            / f"../artifacts/{self.__id}_outgoing_buffer_1.wav"
+                                        ),
+                                        "wb",
+                                    ) as buffer_1:
+                                        buffer_1.setnchannels(
+                                            self.__config["tts_channels"]
+                                        )
+                                        buffer_1.setsampwidth(
+                                            self.__config["tts_sample_width"]
+                                        )
+                                        buffer_1.setframerate(
+                                            self.__config["tts_sample_rate"]
+                                        )
                                         buffer_1.writeframes(chunk)
                                         time.sleep(delay)
                                 else:
                                     buffer_switch = True
                                     if self.__media_player_1:
                                         self.__media_player_1.stopTransmit(call_media)
-                                    self.__media_player_2 = pj.AudioMediaPlayer()  
-                                    self.__media_player_2.createPlayer(str(HERE / f"../artifacts/{self.__id}_outgoing_buffer_1.wav"), pj.PJMEDIA_FILE_NO_LOOP)
+                                    self.__media_player_2 = pj.AudioMediaPlayer()
+                                    self.__media_player_2.createPlayer(
+                                        str(
+                                            HERE
+                                            / f"../artifacts/{self.__id}_outgoing_buffer_1.wav"
+                                        ),
+                                        pj.PJMEDIA_FILE_NO_LOOP,
+                                    )
                                     self.__media_player_2.startTransmit(call_media)
-                                    with wave.open(str(HERE / f"../artifacts/{self.__id}_outgoing_buffer_0.wav"), 'wb') as buffer_0:
-                                        buffer_0.setnchannels(self.__config['tts_channels']) 
-                                        buffer_0.setsampwidth(self.__config['tts_sample_width'])  
-                                        buffer_0.setframerate(self.__config['tts_sample_rate'])
+                                    with wave.open(
+                                        str(
+                                            HERE
+                                            / f"../artifacts/{self.__id}_outgoing_buffer_0.wav"
+                                        ),
+                                        "wb",
+                                    ) as buffer_0:
+                                        buffer_0.setnchannels(
+                                            self.__config["tts_channels"]
+                                        )
+                                        buffer_0.setsampwidth(
+                                            self.__config["tts_sample_width"]
+                                        )
+                                        buffer_0.setframerate(
+                                            self.__config["tts_sample_rate"]
+                                        )
                                         buffer_0.writeframes(chunk)
                                         time.sleep(delay)
-                                
-                        time.sleep(delay)                
-                        # play residue audio from last buffer      
-                        # try:          
+
+                        time.sleep(delay)
+                        # play residue audio from last buffer
+                        # try:
                         #     if buffer_switch:
                         #         self.__media_player_2.stopTransmit(call_media)
                         #         if self.__media_player_1:
                         #                     self.__media_player_1.stopTransmit(call_media)
-                        #         self.__media_player_1 = pj.AudioMediaPlayer()  
+                        #         self.__media_player_1 = pj.AudioMediaPlayer()
                         #         self.__media_player_1.createPlayer(str(HERE / f"../artifacts/{self.__id}_outgoing_buffer_0.wav"), pj.PJMEDIA_FILE_NO_LOOP)
                         #         self.__media_player_1.startTransmit(call_media)
                         #         time.sleep(delay)
@@ -333,115 +498,175 @@ class softphone:
                         #         self.__media_player_1.stopTransmit(call_media)
                         #         if self.__media_player_2:
                         #                     self.__media_player_2.stopTransmit(call_media)
-                        #         self.__media_player_2 = pj.AudioMediaPlayer()  
+                        #         self.__media_player_2 = pj.AudioMediaPlayer()
                         #         self.__media_player_2.createPlayer(str(HERE / f"../artifacts/{self.__id}_outgoing_buffer_1.wav"), pj.PJMEDIA_FILE_NO_LOOP)
-                        #         self.__media_player_2.startTransmit(call_media)  
+                        #         self.__media_player_2.startTransmit(call_media)
                         #         time.sleep(delay)
                         # except Exception as e:
                         #     print('Error when playing residue audio buffer', e)
                         #     traceback.print_exc()
-                except Exception as e:    
-                    print('Error occured while speaking (probably because user hung up):', e)
-                    traceback.print_exc()                 
+                except Exception as e:
+                    print(
+                        "Error occured while speaking (probably because user hung up):",
+                        e,
+                    )
+                    traceback.print_exc()
                 return
         print("No available audio media")
 
-    def play_audio(self, audio_file_path, do_loop = False):
+    def play_audio(self, audio_file_path, do_loop=False):
+        """
+        Play an audio file to the active call.
+
+        Args:
+            audio_file_path (str): The file path to the audio file to be played.
+            do_loop (bool, optional): Whether to loop the audio file. Defaults to False.
+
+        Returns:
+            None
+        """
         if not self.active_call:
             print("Can't play audio: No call in progress.")
             return
         if self.__paired_call:
             print("Can't play audio: Call is in forwarding session.")
             return
-        
+
         call_info = self.active_call.getInfo()
         for i in range(len(call_info.media)):
-            if call_info.media[i].type == pj.PJMEDIA_TYPE_AUDIO and call_info.media[i].status == pj.PJSUA_CALL_MEDIA_ACTIVE:
+            if (
+                call_info.media[i].type == pj.PJMEDIA_TYPE_AUDIO
+                and call_info.media[i].status == pj.PJSUA_CALL_MEDIA_ACTIVE
+            ):
                 call_media = self.active_call.getAudioMedia(i)
-                
+
             if self.__media_player_1:
                 self.__media_player_1.stopTransmit(call_media)
             if self.__media_player_2:
                 self.__media_player_2.stopTransmit(call_media)
-                
-            self.__media_player_1 = pj.AudioMediaPlayer()  
+
+            self.__media_player_1 = pj.AudioMediaPlayer()
             loop_mode = pj.PJMEDIA_FILE_LOOP if do_loop else pj.PJMEDIA_FILE_NO_LOOP
             self.__media_player_1.createPlayer(audio_file_path, loop_mode)
             self.__media_player_1.startTransmit(call_media)
-        
+
     def listen(self):
+        """
+        Listen for incoming audio on the incoming call and transcribe it to text. Listens as long
+        as a certain decibel level is maintained.
+
+        Returns:
+            str: The transcribed text from the recorded audio.
+        """
         # skip silence
-        if not self.__record_incoming_audio(self.__config['silence_sample_interval']):
+        if not self.__record_incoming_audio(self.__config["silence_sample_interval"]):
             return ""
-        
-        last_segment = AudioSegment.from_wav(str(HERE / f"../artifacts/{self.__id}_incoming.wav"))
-        while last_segment.dBFS < self.__config['silence_threshold']:
-            
+
+        last_segment = AudioSegment.from_wav(
+            str(HERE / f"../artifacts/{self.__id}_incoming.wav")
+        )
+        while last_segment.dBFS < self.__config["silence_threshold"]:
+
             if not self.active_call or self.__paired_call:
                 return ""
-            
-            if not self.__record_incoming_audio(self.__config['silence_sample_interval']):
+
+            if not self.__record_incoming_audio(
+                self.__config["silence_sample_interval"]
+            ):
                 return ""
-            last_segment = AudioSegment.from_wav(str(HERE / f"../artifacts/{self.__id}_incoming.wav"))
-            
+            last_segment = AudioSegment.from_wav(
+                str(HERE / f"../artifacts/{self.__id}_incoming.wav")
+            )
+
         # record audio while over silence threshold
         combined_segments = last_segment
-        while last_segment.dBFS > self.__config['silence_threshold']:
-            
+        while last_segment.dBFS > self.__config["silence_threshold"]:
+
             if not self.active_call or self.__paired_call:
                 return ""
-            
-            if not self.__record_incoming_audio(self.__config['speaking_sample_interval']):
+
+            if not self.__record_incoming_audio(
+                self.__config["speaking_sample_interval"]
+            ):
                 return ""
-            last_segment = AudioSegment.from_wav(str(HERE / f"../artifacts/{self.__id}_incoming.wav"))
+            last_segment = AudioSegment.from_wav(
+                str(HERE / f"../artifacts/{self.__id}_incoming.wav")
+            )
             combined_segments += last_segment
-        
+
         # output combined audio to file
-        combined_segments.export(str(HERE / f"../artifacts/{self.__id}_incoming_combined.wav"), format="wav")
-        
+        combined_segments.export(
+            str(HERE / f"../artifacts/{self.__id}_incoming_combined.wav"), format="wav"
+        )
+
         # transcribe audio
-        audio_file = open(str(HERE / f"../artifacts/{self.__id}_incoming_combined.wav"), "rb")
+        audio_file = open(
+            str(HERE / f"../artifacts/{self.__id}_incoming_combined.wav"), "rb"
+        )
         transcription = self.__openai_client.audio.transcriptions.create(
-        model="whisper-1", 
-        file=audio_file
+            model="whisper-1", file=audio_file
         )
         return transcription.text
-                
-    def __record_incoming_audio(self, duration = 1.0):
+
+    def __record_incoming_audio(self, duration=1.0):
+        """
+        Record incoming audio from the active call for a specified duration and safe it as an artifact WAVE file.
+
+        Args:
+            duration (float, optional): The duration in seconds to record the audio. Defaults to 1.0.
+
+        Returns:
+            bool: True if the recording was successful, False otherwise.
+        """
         call_info = self.active_call.getInfo()
         for i in range(len(call_info.media)):
-            if call_info.media[i].type == pj.PJMEDIA_TYPE_AUDIO and call_info.media[i].status == pj.PJSUA_CALL_MEDIA_ACTIVE:
+            if (
+                call_info.media[i].type == pj.PJMEDIA_TYPE_AUDIO
+                and call_info.media[i].status == pj.PJSUA_CALL_MEDIA_ACTIVE
+            ):
                 call_media = self.active_call.getAudioMedia(i)
-                
+
                 self.__media_recorder = pj.AudioMediaRecorder()
-                self.__media_recorder.createRecorder(str(HERE / f"../artifacts/{self.__id}_incoming.wav"))
+                self.__media_recorder.createRecorder(
+                    str(HERE / f"../artifacts/{self.__id}_incoming.wav")
+                )
                 call_media.startTransmit(self.__media_recorder)
                 time.sleep(duration)
-                
+
                 if not self.__media_recorder or not self.active_call:
                     return False
-                
+
                 call_media.stopTransmit(self.__media_recorder)
                 del self.__media_recorder
-                
+
         return True
-    
-# share one library instance and account for multiple sofpthones
-class softphone_group:
+
+
+class SoftphoneGroup:
     pjsua_endpoint = None
     pjsua_account = None
     sip_credentials = None
     softphones = []
-    
+
     is_listening = False
-    
+
     def __init__(self, credentials_path):
+        """
+        Initialize a SoftphoneGroup instance with the provided SIP credentials. Used to share a single
+        PJSUA2 library instance and SIP account among multiple softphones.
+
+        Args:
+            credentials_path (str): The file path to the SIP credentials JSON file.
+
+        Returns:
+            None
+        """
         self.softphones = []
 
         # Load SIP Credentials
-        with open(credentials_path, 'r') as f:
+        with open(credentials_path, "r") as f:
             self.sip_credentials = json.load(f)
-            
+
         # Initialize PJSUA2 endpoint
         ep_cfg = pj.EpConfig()
         ep_cfg.uaConfig.threadCnt = 1
@@ -455,27 +680,50 @@ class softphone_group:
         sipTpConfig.port = 5060
         self.pjsua_endpoint.transportCreate(pj.PJSIP_TRANSPORT_UDP, sipTpConfig)
         self.pjsua_endpoint.libStart()
-        
+
         # Create SIP Account
         acfg = pj.AccountConfig()
-        acfg.idUri = self.sip_credentials['idUri']
-        acfg.regConfig.registrarUri = self.sip_credentials['registrarUri']
-        cred = pj.AuthCredInfo("digest", "*", self.sip_credentials['username'], 0, self.sip_credentials['password'])
+        acfg.idUri = self.sip_credentials["idUri"]
+        acfg.regConfig.registrarUri = self.sip_credentials["registrarUri"]
+        cred = pj.AuthCredInfo(
+            "digest",
+            "*",
+            self.sip_credentials["username"],
+            0,
+            self.sip_credentials["password"],
+        )
         acfg.sipConfig.authCreds.append(cred)
 
-        self.pjsua_account = group_account(self)
+        self.pjsua_account = GroupAccount(self)
         self.pjsua_account.create(acfg)
-        
+
         # initialize media devices
         self.pjsua_endpoint.audDevManager().setNullDev()
-        
-        
+
         self.is_listening = True
-        
+
     def add_phone(self, phone):
+        """
+        Add a softphone instance to this softphone group.
+
+        Args:
+            phone (Softphone): The softphone instance to be added to the group.
+
+        Returns:
+            None
+        """
         self.softphones.append(phone)
-        
+
     def remove_phone(self, phone):
+        """
+        Remove a softphone instance from this softphone group.
+
+        Args:
+            phone (Softphone): The softphone instance to be removed from the group.
+
+        Returns:
+            None
+        """
         self.softphones.remove(phone)
         if len(self.softphones) == 0:
             self.pjsua_account.shutdown()
