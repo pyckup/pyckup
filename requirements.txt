@@ -1,0 +1,9 @@
+pyyaml
+pathlib
+pydub
+numpy
+openai
+langchain-core
+langchain-openai
+langchain-community
+sqlite3

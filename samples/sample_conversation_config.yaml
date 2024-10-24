@@ -1,0 +1,43 @@
+conversation_title: Sample Conversation
+conversation_paths:
+  entry: # entry point of the conversation
+    - type: read # read out the specified text
+      text: Hello, thank you for calling. 
+      interactive: false
+    - type: information # ask for information, continue until provided
+      title: name
+      description: The first name of the user. 
+      format: The first name of the user, starting with a capital letter.
+    - type: function_choice # call a function from the provided module. Return value determines the path chosen.
+      module: samples.sample_trunks
+      function: name_is_marius
+      options:
+        True:
+          - type: path # go to the specified path
+            path: is_marius
+        False:
+          - type: path
+            path: is_not_marius
+  is_marius:
+    - type: choice # ask the user to choose between multiple options
+      choice: Do you prefer apples or oranges?
+      options:
+        apples::
+          - type: read
+            text: Apples are great!
+        oranges:
+          - type: read
+            text: Oranges are great!
+  is_not_marius:
+    - type: function
+      module: samples.sample_trunks
+      function: say_goodbye
+  aborted: # path to be taken if the conversation is aborted by the user
+    - type: prompt # give instructions to the LLM
+      prompt: Apologize to the user.
+      interactive: false
+    - type: read
+      text: Goodbye, thank you again for calling.
+      interactive: false
+  
+
