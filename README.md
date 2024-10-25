@@ -5,8 +5,8 @@ Conversations can be defined by providing a predetermined structure in the forma
 
 ## Setup
 1. Install package 
-    -**automatically**: `pip install git+https://github.com/ruetzmax/call-e.git` (you may have to install missing dependencies) OR
-    -**manually**: `git clone https://github.com/ruetzmax/call-e.git`, `cd call-e`, `pip install -r requirements.txt`, `pip install .`
+    - **automatically**: `pip install git+https://github.com/ruetzmax/call-e.git` (you may have to install missing dependencies) OR
+    - **manually**: `git clone https://github.com/ruetzmax/call-e.git`, `cd call-e`, `pip install -r requirements.txt`, `pip install .`
 2. Install PJSUA2 (https://docs.pjsip.org/en/latest/pjsua2/building.html) 
 3. Setup OPENAI API environment variable: `export OPENAI_API_KEY=<your_openai_api_key>`      
 
