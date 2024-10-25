@@ -1,10 +1,11 @@
 ## About
 Python package used to make and recieve calls and have them conducted by AI. 
 Calls are made via a SIP softphone using the PJSUA2 library. LLM and TTS/STT services accessed through OpenAI API. 
+Conversations can be defined by providing a predetermined structure in the format of a conversation config.
 
 ## Setup
 1. Install package 
-    -**automatically**: `pip install git+https://github.com/ruetzmax/call-e.git' (you may have to install missing dependencies) OR
+    -**automatically**: `pip install git+https://github.com/ruetzmax/call-e.git` (you may have to install missing dependencies) OR
     -**manually**: `git clone https://github.com/ruetzmax/call-e.git`, `cd call-e`, `pip install -r requirements.txt`, `pip install .`
 2. Install PJSUA2 (https://docs.pjsip.org/en/latest/pjsua2/building.html) 
 3. Setup OPENAI API environment variable: `export OPENAI_API_KEY=<your_openai_api_key>`      
