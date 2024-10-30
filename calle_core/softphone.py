@@ -33,7 +33,7 @@ class SoftphoneCall(pj.Call):
         """
         super(SoftphoneCall, self).__init__(acc, call_id)
         self.softphone = softphone
-        self._is_paired = paired
+        self.__is_paired = paired
 
     def onCallState(self, prm):
         if not self.softphone:
@@ -178,13 +178,14 @@ class Softphone:
         call_op_param = pj.CallOpParam(True)
         self.active_call.makeCall(sip_adress, call_op_param)
 
-    def forward_call(self, phone_number):
+    def forward_call(self, phone_number, timeout=None):
         """
         Attempt to forward the current call to a specified phone number. A seperate call will be made and the
         two calls will be connected.
 
         Args:
             phone_number (str): The phone number to forward the call to in E.164 format.
+            timeout (float, optional): The maximum time to wait for the forwarded call to be picked up in seconds. If None, waits indefinitely. Defaults to None.
 
         Returns:
             bool: True if the call was successfully forwarded, False otherwise.
@@ -211,11 +212,13 @@ class Softphone:
         self.__paired_call.makeCall(sip_adress, call_op_param)
 
         # wait for pick up
-        self.__wait_for_stop_calling("paired")
+        self.__wait_for_stop_calling("paired", timeout=timeout)
 
         if not self.__has_picked_up_call("paired"):
             print("Call not picked up.")
-            self.__paired_call = None
+            if self.__paired_call:
+                self.__paired_call.hangup(pj.CallOpParam(True))
+                self.__paired_call = None
             return False
 
         # connect audio medias of both calls
@@ -287,13 +290,23 @@ class Softphone:
             bool: True if the active call has been picked up, otherwise False.
         """
         return self.__has_picked_up_call("active")
+    
+    def has_paired_call(self):
+        """
+        Check if the paired call has been picked up.
 
-    def __wait_for_stop_calling(self, call_type="active"):
+        Returns:
+            bool: True if the paired call has been picked up, otherwise False.
+        """
+        return self.__has_picked_up_call("paired")
+
+    def __wait_for_stop_calling(self, call_type="active", timeout=None):
         """
         Wait for the specified call (active call or paired call) to stop ringing. Holds program execution.
 
         Args:
             call_type (str, optional): The type of call to check. Can be "active" or "paired". Defaults to "active".
+            timeout (float, optional): The maximum time to wait in seconds. If None, waits indefinitely. Defaults to None.
 
         Returns:
             None
@@ -308,27 +321,33 @@ class Softphone:
         if not call:
             return
 
+        waited_time = 0
         call_info = call.getInfo()
         while (
-            call_info.state == pj.PJSIP_INV_STATE_CALLING
-            or call_info.state == pj.PJSIP_INV_STATE_EARLY
+            (call_info.state == pj.PJSIP_INV_STATE_CALLING
+            or call_info.state == pj.PJSIP_INV_STATE_EARLY)
+            and (not timeout or waited_time < timeout)
         ):
             try:
                 time.sleep(0.2)
+                waited_time += 0.2
                 if not call:
                     return
                 call_info = call.getInfo()
             except Exception as e:
                 return
 
-    def wait_for_stop_calling(self):
+    def wait_for_stop_calling(self, timeout=None):
         """
         Wait for the active call to stop ringing. Holds program execution.
+        
+        Args:
+            timeout (float, optional): The maximum time to wait in seconds. If None, waits indefinitely. Defaults to None.
 
         Returns:
             None
         """
-        self.__wait_for_stop_calling("active")
+        self.__wait_for_stop_calling("active", timeout)
 
     def hangup(self, paired_only=False):
         """
@@ -344,10 +363,10 @@ class Softphone:
         if self.__paired_call:
             self.__paired_call.hangup(pj.CallOpParam(True))
             self.__paired_call = None
-
+            
         if paired_only:
             return
-
+        
         if self.active_call:
             self.active_call.hangup(pj.CallOpParam(True))
             self.active_call = None
