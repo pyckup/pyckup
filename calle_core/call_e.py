@@ -13,24 +13,20 @@ HERE = Path(os.path.abspath(__file__)).parent
 
 class call_e:
 
-    outgoing_conversation_config = None
-    outgoing_conversation_title = None
     db = None
 
     def __init__(
-        self, sip_credentials_path, outgoing_conversation_config_path, db_path
+        self, sip_credentials_path, db_path=None
     ):
         """
         Create an instance of the call_e class.
 
         Args:
             sip_credentials_path (str): The file path to the SIP credentials.
-            outgoing_conversation_config_path (str): The file path to the initial outgoing conversation configuration.
-            db_path (str): The file path to the database (will be created if it doesn't exist).
-        """
+            db_path (str, optional): The file path to the database (will be created if it doesn't exist). If None, database functions can't be used. Defaults to None.    
+            """
         self.__sip_credentials_path = sip_credentials_path
         self.__setup_db(db_path)
-        self.update_outgoing_conversation_config(outgoing_conversation_config_path)
 
     def __del__(self):
         if self.db is not None:
@@ -49,63 +45,72 @@ class call_e:
         with open(config_path, "r") as config_file:
             return yaml.safe_load(config_file)
 
-    def update_outgoing_conversation_config(self, config_path):
+    def setup_conversation(self, config_path):
         """
-        Change the outgoing conversation configuration and ensure database tables exist.
+        Get conversation config and title and, if database functionality is used, ensure tables exist.
 
         Args:
             config_path (str): The file path to the outgoing conversation configuration YAML file.
 
         Returns:
-            None
+            tuple: A tuple containing the conversation configuration dictionary and the conversation title string.
         """
-        self.outgoing_conversation_config = self.__read_conversation_config(config_path)
+        conversation_config = self.__read_conversation_config(config_path)
 
-        # ensure that results table exists
-        self.outgoing_conversation_title = (
-            self.outgoing_conversation_config["conversation_title"]
+        conversation_title = (
+            conversation_config["conversation_title"]
             .lower()
             .replace(" ", "_")
         )
-        fields = ""
-        for path in self.outgoing_conversation_config["conversation_paths"].values():
-            for item in path:
-                if "title" in item:
-                    fields += ",\n"
-                    fields += f"{item['title'].lower().replace(' ', '_')} TEXT"
+            
+        if self.db is not None:
+            # ensure that results table exists
+            fields = ""
+            for path in conversation_config["conversation_paths"].values():
+                for item in path:
+                    if "title" in item:
+                        fields += ",\n"
+                        fields += f"{item['title'].lower().replace(' ', '_')} TEXT"
 
-        cursor = self.db.cursor()
-        cursor.execute(
-            f"""
-            CREATE TABLE IF NOT EXISTS {self.outgoing_conversation_title} (
-                result_id INTEGER PRIMARY KEY, 
-                contact_id INTEGER UNIQUE{fields}
-            )"""
-        )
+            cursor = self.db.cursor()
+            cursor.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS {conversation_title} (
+                    result_id INTEGER PRIMARY KEY, 
+                    contact_id INTEGER UNIQUE{fields}
+                )"""
+            )
 
-        # ensure that status table exists
-        cursor.execute(
-            f"""
-            CREATE TABLE IF NOT EXISTS {self.outgoing_conversation_title}_status (
-                status_id INTEGER PRIMARY KEY, 
-                contact_id INTEGER UNIQUE,
-                num_attempts INTEGER,
-                status TEXT
-            )"""
-        )
+            # ensure that status table exists
+            cursor.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS {conversation_title}_status (
+                    status_id INTEGER PRIMARY KEY, 
+                    contact_id INTEGER UNIQUE,
+                    num_attempts INTEGER,
+                    status TEXT
+                )"""
+            )
 
-        self.db.commit()
+            self.db.commit()
+        
+        return conversation_config, conversation_title
 
     def __setup_db(self, db_path):
         """
         Ensure that the database and the contacts table exists.
 
         Args:
-            db_path (str): The file path to the (to be created) SQLite database.
+            db_path (str): The file path to the (to be created) SQLite database. If None, no database will be created.
 
         Returns:
             None
         """
+        
+        if db_path is None:
+            self.db = None
+            return
+        
         self.db = sqlite3.connect(db_path)
         cursor = self.db.cursor()
 
@@ -116,30 +121,32 @@ class call_e:
                 contact_id INTEGER PRIMARY KEY, 
                 name TEXT,
                 phone_number TEXT,
-                address TEXT,
                 CONSTRAINT unq UNIQUE (name, phone_number)
             )"""
         )
         self.db.commit()
 
-    def add_contact(self, name, phone_number, address):
+    def add_contact(self, name, phone_number):
         """
         Add a new contact to the database.
 
         Args:
             name (str): The name of the contact.
             phone_number (str): The phone number of the contact.
-            address (str): The address of the contact.
 
         Returns:
             None
         """
+        if self.db is None:
+            print("Cannot add contact: no database provided")
+            return
+        
         cursor = self.db.cursor()
         cursor.execute(
             """
-            INSERT OR IGNORE INTO contacts (name, phone_number, address) VALUES (?, ?, ?)
+            INSERT OR IGNORE INTO contacts (name, phone_number) VALUES (?, ?)
         """,
-            (name, phone_number, address),
+            (name, phone_number),
         )
 
         self.db.commit()
@@ -154,6 +161,10 @@ class call_e:
         Returns:
             dict or None: A dictionary with the contact's information if found, otherwise None.
         """
+        if self.db is None:
+            print("Cannot get contact: no database provided")
+            return None
+        
         cursor = self.db.cursor()
         cursor.execute(
             """
@@ -170,23 +181,30 @@ class call_e:
         return {
             "name": contact_data[1],
             "phone_number": contact_data[2],
-            "address": contact_data[3],
         }
 
-    def get_contact_status(self, contact_id):
+    def get_contact_status(self, contact_id, conversation_config_path):
         """
         Retrieve the status of a contact for the previous calls using this conversation.
 
         Args:
             contact_id (int): The ID of the contact whose status is to be retrieved.
+            conversation_title (str): The path to the config file for which the status should be retrieved.
+
 
         Returns:
             dict or None: A dictionary with the contact's status information if found, otherwise None.
         """
+        if self.db is None:
+            print("Cannot get contact status: no database provided")
+            return None
+        
+        _, conversation_title = self.setup_conversation(conversation_config_path)
+        
         cursor = self.db.cursor()
         cursor.execute(
             f"""
-            SELECT * FROM {self.outgoing_conversation_title}_status WHERE contact_id = ?
+            SELECT * FROM {conversation_title}_status WHERE contact_id = ?
         """,
             (contact_id,),
         )
@@ -197,47 +215,57 @@ class call_e:
             return None
 
         return {"num_attempts": status_data[2], "status": status_data[3]}
-
-    def call_contact(self, contact_id, enable_logging=True):
+    
+    def __perform_outgoing_call(self, conversation_config_path, phone_number=None, contact_id=None, enable_logging=True):
         """
-        Initiate a call to a contact and lead them through the current outgoing conversation.
+        Perform an outgoing call to a specified phone number or contact ID. Wrapped by call_number and call_contact.
 
         Args:
-            contact_id (int): The ID of the contact to call.
-            enable_logging (bool, optional): Whether to save a log of the conversation. Defaults to True.
+            conversation_config_path (str): The file path to the conversation configuration.
+            phone_number (str, optional): The phone number to call. Defaults to None. Either this or contact_id must be provided.
+            contact_id (int, optional): The contact ID to call. Defaults to None. Either this or phone_number must be provided.
+            enable_logging (bool, optional): Whether to enable logging of the conversation. Defaults to True.
 
         Returns:
             None
         """
-        conversation_log = ""
-        contact = self.get_contact(contact_id)
-
-        if not contact:
-            print("Couldn't make call: invalid contact id.")
+        if phone_number is None and contact_id is None:
+            print("Couldn't make call: you either have to provide a phone number or a contact id.")
             return
+        
+        conversation_log = ""
+        conversation_config, conversation_title = self.setup_conversation(conversation_config_path)
+        
+        if contact_id:
+            contact = self.get_contact(contact_id)
+            if not contact:
+                print("Couldn't make call: invalid contact id.")
+                return
 
-        # ensure that contact has status entry
-        cursor = self.db.cursor()
-        cursor.execute(
-            f"""
-            INSERT OR IGNORE INTO {self.outgoing_conversation_title}_status (contact_id, num_attempts, status) VALUES (?, 0, "NOT_REACHED")
-            """,
-            (contact_id,),
-        )
+            phone_number = contact["phone_number"]
+            
+            # ensure that contact has status entry
+            cursor = self.db.cursor()
+            cursor.execute(
+                f"""
+                INSERT OR IGNORE INTO {conversation_title}_status (contact_id, num_attempts, status) VALUES (?, 0, "NOT_REACHED")
+                """,
+                (contact_id,),
+            )
 
-        # increment number of attempts
-        cursor.execute(
-            f"""
-            UPDATE {self.outgoing_conversation_title}_status SET num_attempts = num_attempts + 1 WHERE contact_id = ?
-            """,
-            (contact_id,),
-        )
+            # increment number of attempts
+            cursor.execute(
+                f"""
+                UPDATE {conversation_title}_status SET num_attempts = num_attempts + 1 WHERE contact_id = ?
+                """,
+                (contact_id,),
+            )
 
-        self.db.commit()
+            self.db.commit()
 
         sf = Softphone(self.__sip_credentials_path)
-        print("Calling " + contact["phone_number"] + "...")
-        sf.call(contact["phone_number"])
+        print("Calling " + phone_number + "...")
+        sf.call(phone_number)
         sf.wait_for_stop_calling()
 
         if not sf.has_picked_up_call():
@@ -246,7 +274,7 @@ class call_e:
 
         print("Call picked up. Setting up extractor.")
 
-        extractor = LLMExtractor(self.outgoing_conversation_config, softphone=sf)
+        extractor = LLMExtractor(conversation_config, softphone=sf)
         extractor_response = extractor.run_extraction_step("")
         conversation_log += "Call-E: " + extractor_response + "\n"
         sf.say(extractor_response)
@@ -265,39 +293,41 @@ class call_e:
         if extractor.get_status() != ExtractionStatus.COMPLETED:
             print("Extraction aborted")
 
-            cursor = self.db.cursor()
-            cursor.execute(
-                f"""
-            UPDATE {self.outgoing_conversation_title}_status SET status = "ABORTED" WHERE contact_id = ?
-            """,
-                (contact_id,),
-            )
-            self.db.commit()
+            if contact_id:
+                cursor = self.db.cursor()
+                cursor.execute(
+                    f"""
+                UPDATE {conversation_title}_status SET status = "ABORTED" WHERE contact_id = ?
+                """,
+                    (contact_id,),
+                )
+                self.db.commit()
         else:
             # successful extraction, save results in db
             print("Extraction completed")
 
-            cursor = self.db.cursor()
-            cursor.execute(
-                f"""
-            UPDATE {self.outgoing_conversation_title}_status SET status = "COMPLETED" WHERE contact_id = ?
-            """,
-                (contact_id,),
-            )
+            if contact_id:
+                cursor = self.db.cursor()
+                cursor.execute(
+                    f"""
+                UPDATE {conversation_title}_status SET status = "COMPLETED" WHERE contact_id = ?
+                """,
+                    (contact_id,),
+                )
 
-            information = extractor.get_information()
-            cursor.execute(
-                f"""
-                INSERT OR REPLACE INTO {self.outgoing_conversation_title} (
-                    contact_id, {', '.join([key.lower() for key in information.keys()])}
-                    )
-                VALUES (
-                    ?, {', '.join(['?']*len(information))}
-                    )
-            """,
-                [contact_id] + list(information.values()),
-            )
-            self.db.commit()
+                information = extractor.get_information()
+                cursor.execute(
+                    f"""
+                    INSERT OR REPLACE INTO {conversation_title} (
+                        contact_id, {', '.join([key.lower() for key in information.keys()])}
+                        )
+                    VALUES (
+                        ?, {', '.join(['?']*len(information))}
+                        )
+                """,
+                    [contact_id] + list(information.values()),
+                )
+                self.db.commit()
 
         # usually we would hang up here, but if the call is forwarded then should keep the connection open
         while sf.is_forwarded():
@@ -309,22 +339,77 @@ class call_e:
         if enable_logging:
             os.makedirs(HERE / "../logs", exist_ok=True)
             with open(
-                HERE / f"../logs/{self.outgoing_conversation_title}_{contact_id}.log",
+                HERE / f"../logs/{conversation_title}_{contact_id}.log",
                 "w",
             ) as log_file:
                 log_file.write(conversation_log)
+    
+    def call_number(self, phone_number, conversation_config_path, enable_logging=True):
+        """
+        Initiate a call to a phone number and lead recipient through the current outgoing conversation.
+        Update contact status while doing so.
 
-    def call_contacts(self, contact_ids=None, maximum_attempts=None):
+        Args:
+            contact_id (int): The ID of the contact to call.
+            conversation_config_path (str): The file path to the conversation configuration.
+            enable_logging (bool, optional): Whether to save a log of the conversation. Defaults to True.
+
+        Returns:
+            None
+        """
+        self.__perform_outgoing_call(conversation_config_path, phone_number=phone_number, enable_logging=enable_logging)
+        
+
+    def call_contact(self, contact_id, conversation_config_path, enable_logging=True):
+        """
+        Initiate a call to a contact and lead them through the current outgoing conversation.
+        Update contact status while doing so.
+
+        Args:
+            contact_id (int): The ID of the contact to call.
+            conversation_config_path (str): The file path to the conversation configuration.
+            enable_logging (bool, optional): Whether to save a log of the conversation. Defaults to True.
+
+        Returns:
+            None
+        """
+        if self.db is None:
+            print("Cannot call contact: no database provided")
+            return
+        
+        self.__perform_outgoing_call(conversation_config_path, contact_id=contact_id, enable_logging=enable_logging)
+        
+    def call_numbers(self, phone_numbers, conversation_config_path, enable_logging=True):
+        """
+        Call a list of phone numbers and lead them through the current outgoing conversation.
+
+        Args:
+            phone_numbers (list of str): A list of phone numbers to call in E.164 format.
+            conversation_config_path (str): The file path to the conversation configuration.
+            enable_logging (bool, optional): Whether to save a log of the conversation. Defaults to True.
+
+        Returns:
+            None
+        """
+        for phone_number in phone_numbers:
+            self.call_number(phone_number, conversation_config_path, enable_logging=enable_logging)
+
+    def call_contacts(self, conversation_config_path, contact_ids=None, maximum_attempts=None):
         """
         Call a list of contacts according to their statuses from previous call attempts.
 
         Args:
+            conversation_config_path (str): The file path to the conversation configuration.
             contact_ids (list of int, optional): A list of contact IDs to call. If None, all contacts will be called. Defaults to None.
             maximum_attempts (int, optional): The maximum number of call attempts for each contact. If None, there is no limit. Defaults to None.
 
         Returns:
             None
         """
+        if self.db is None:
+            print("Cannot call contacts: no database provided")
+            return
+        
         if contact_ids is None:
             cursor = self.db.cursor()
             cursor.execute(
@@ -345,11 +430,11 @@ class call_e:
                 print(f"Invalid contact id: {contact_id}")
                 continue
 
-            status = self.get_contact_status(contact_id)
+            status = self.get_contact_status(contact_id, conversation_config_path)
 
             if status is None:
                 # this is the first call, always should be made
-                self.call_contact(contact_id)
+                self.call_contact(contact_id, conversation_config_path)
                 continue
 
             if status["status"] != "NOT_REACHED":
@@ -360,7 +445,7 @@ class call_e:
                 print(f"Contact {contact_id} has reached maximum number of attempts.")
                 continue
 
-            self.call_contact(contact_id)
+            self.call_contact(contact_id, conversation_config_path)
 
     def __softphone_listen(self, sf, sf_group, incoming_conversation_config):
         """

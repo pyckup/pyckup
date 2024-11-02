@@ -15,15 +15,22 @@ Conversations can be defined by providing a predetermined structure in the forma
 
     from call_e import call_e
 
-    calle = call_e("samples/sample_credentials.json", "../samples/sample_conversation_config.yaml", "your_database_path.db")
+    calle = call_e("samples/sample_credentials.json", "your_database_path.db")
+
+    # Call a single phone number
+    calle.call_number("+4912345678", "../samples/sample_conversation_config.yaml")
+
+    # Call multiple phone numbers
+    calle.call_numbers(["+4912345678", "+499876543"], "../samples/sample_conversation_config.yaml")
 
     # Call a single contact
-    calle.add_contact("Marius Testman", "+4912345678", "Teststadt")
-    calle.call_contact(1)
+    calle.add_contact("Marius Testperson", "+4912345678")
+    calle.call_contact(1, "../samples/sample_conversation_config.yaml")
 
     # Call multiple contacts
-    calle.add_contact("Maria Testwoman", "+499876543", "Teststadt")
-    calle.call_contacts()
+    calle.add_contact("Maria Testperson", "+499876543")
+    calle.call_contacts("../samples/sample_conversation_config.yaml")
+
 
 ### Recieving calls
     grp = calle.start_listening(HERE / "../samples/sample_conversation_config.yaml", num_devices=1)
