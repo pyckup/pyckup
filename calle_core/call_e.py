@@ -1,3 +1,4 @@
+from multiprocessing import Process
 import os
 from pathlib import Path
 import traceback
@@ -460,8 +461,12 @@ class call_e:
         Returns:
             None
         """
+        # if dbg_idx != 0:
+        #     print(f'killing thread {dbg_idx}')
+        #     return
+            
         # register thread
-        sf_group.pjsua_endpoint.libRegisterThread("softphone_listen")
+        sf_group.pjsua_endpoint.libRegisterThread(f"softphone_listen")
 
         try:
             print("Listening...")
@@ -469,9 +474,10 @@ class call_e:
             while not sf.has_picked_up_call():
                 if not sf_group.is_listening:
                     return
+                time.sleep(1)
                 pass
 
-            print("Incoming call. Setting up extractor.")
+            print(f"Incoming call on softphone {sf.get_id()}. Setting up extractor.")
 
             extractor = LLMExtractor(incoming_conversation_config, softphone=sf)
             extractor_response = extractor.run_extraction_step("")
@@ -482,9 +488,16 @@ class call_e:
                 and sf.has_picked_up_call()
             ):
                 user_input = sf.listen()
+                
+                # user input is empty if listening couldn`t be performed. Could be due to call interruption or holding the call for too long.
+                if user_input == "":
+                    sf.hangup()
+                    print("Call interrupted during listening.")
+                
                 sf.play_audio(str(HERE / "../resources/processing.wav"))
                 extractor_response = extractor.run_extraction_step(user_input)
                 sf.say(extractor_response)
+
 
             if extractor.get_status() != ExtractionStatus.COMPLETED:
                 print("Extraction aborted")
@@ -507,6 +520,7 @@ class call_e:
             args=(sf, sf_group, incoming_conversation_config),
         )
         listen_thread.start()
+        
 
     def start_listening(self, conversation_path, num_devices=1):
         """

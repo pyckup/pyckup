@@ -134,6 +134,15 @@ class Softphone:
         self.__media_player_2 = None
         self.__media_recorder = None
         self.__group.remove_phone(self)
+        
+    def get_id(self):
+        """
+        Get the unique ID of the softphone instance.
+        
+        Returns:
+            str: The unique ID of the softphone instance.
+        """
+        return self.__id
 
     def __remove_artifacts(self):
         """
@@ -627,38 +636,57 @@ class Softphone:
         )
         return transcription.text
 
-    def __record_incoming_audio(self, duration=1.0):
+    def __record_incoming_audio(self, duration=1.0, unavailable_media_timeout=60):
         """
-        Record incoming audio from the active call for a specified duration and safe it as an artifact WAVE file.
+        Record incoming audio from the active call for a specified duration and save it as an artifact WAVE file.
 
         Args:
             duration (float, optional): The duration in seconds to record the audio. Defaults to 1.0.
+            unavailable_media_timeout (int, optional): The timeout in seconds to wait if call media becomes unavailable (eg. due to holding the call). Defaults to 60.
 
         Returns:
             bool: True if the recording was successful, False otherwise.
         """
-        call_info = self.active_call.getInfo()
-        for i in range(len(call_info.media)):
-            if (
-                call_info.media[i].type == pj.PJMEDIA_TYPE_AUDIO
-                and call_info.media[i].status == pj.PJSUA_CALL_MEDIA_ACTIVE
-            ):
-                call_media = self.active_call.getAudioMedia(i)
+        waited_on_media = 0
+        while waited_on_media < unavailable_media_timeout:
+            call_info = self.active_call.getInfo()
+            for i in range(len(call_info.media)):
+                if (
+                    call_info.media[i].type == pj.PJMEDIA_TYPE_AUDIO
+                    and call_info.media[i].status == pj.PJSUA_CALL_MEDIA_ACTIVE
+                ):
+                    call_media = self.active_call.getAudioMedia(i)
 
-                self.__media_recorder = pj.AudioMediaRecorder()
-                self.__media_recorder.createRecorder(
-                    str(HERE / f"../artifacts/{self.__id}_incoming.wav")
-                )
-                call_media.startTransmit(self.__media_recorder)
-                time.sleep(duration)
+                    self.__media_recorder = pj.AudioMediaRecorder()
+                    self.__media_recorder.createRecorder(
+                        str(HERE / f"../artifacts/{self.__id}_incoming.wav")
+                    )
+                    call_media.startTransmit(self.__media_recorder)
+                    time.sleep(duration)
 
-                if not self.__media_recorder or not self.active_call:
-                    return False
+                    # call was terminated while recording.
+                    if not self.__media_recorder or not self.active_call:
+                        return False
+                    
+                    # call media no longer active. probably holding. Wait for media.
+                    call_info = self.active_call.getInfo()
+                    if not call_info.media[i].status == pj.PJSUA_CALL_MEDIA_ACTIVE:
+                        call_media.stopTransmit(self.__media_recorder)
+                        time.sleep(1)
+                        waited_on_media += 1
+                        continue
 
-                call_media.stopTransmit(self.__media_recorder)
-                del self.__media_recorder
-
-        return True
+                    # recorded successfully
+                    call_media.stopTransmit(self.__media_recorder)
+                    del self.__media_recorder
+                    return True
+              
+            # no available call media. probably holding. Wait for media. 
+            time.sleep(1)
+            waited_on_media += 1
+            continue
+        
+        return False
 
 
 class SoftphoneGroup:
@@ -688,7 +716,7 @@ class SoftphoneGroup:
 
         # Initialize PJSUA2 endpoint
         ep_cfg = pj.EpConfig()
-        ep_cfg.uaConfig.threadCnt = 1
+        ep_cfg.uaConfig.threadCnt = 2
         ep_cfg.logConfig.level = 1
         ep_cfg.logConfig.consoleLevel = 1
         self.pjsua_endpoint = pj.Endpoint()
