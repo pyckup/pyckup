@@ -1,3 +1,4 @@
+from multiprocessing import Process
 import os
 from pathlib import Path
 import traceback
@@ -275,9 +276,11 @@ class call_e:
         print("Call picked up. Setting up extractor.")
 
         extractor = LLMExtractor(conversation_config, softphone=sf)
-        extractor_response = extractor.run_extraction_step("")
-        conversation_log += "Call-E: " + extractor_response + "\n"
-        sf.say(extractor_response)
+        extractor_responses = extractor.run_extraction_step("")
+        conversation_log += "Call-E: " + " ".join([response[0] for response in extractor_responses]) + "\n"
+        for response in extractor_responses:
+            cache_audio = True if response[1] == "read" else False
+            sf.say(response[0], cache_audio=cache_audio)
 
         while (
             extractor.get_status() == ExtractionStatus.IN_PROGRESS
@@ -286,9 +289,11 @@ class call_e:
             user_input = sf.listen()
             sf.play_audio(str(HERE / "../resources/processing.wav"))
             conversation_log += "User: " + user_input + "\n"
-            extractor_response = extractor.run_extraction_step(user_input)
-            conversation_log += "Call-E: " + extractor_response + "\n"
-            sf.say(extractor_response)
+            extractor_responses = extractor.run_extraction_step(user_input)
+            conversation_log += "Call-E: " + " ".join([response[0] for response in extractor_responses]) + "\n"
+            for response in extractor_responses:
+                cache_audio = True if response[1] == "read" else False
+                sf.say(response[0], cache_audio=cache_audio)
 
         if extractor.get_status() != ExtractionStatus.COMPLETED:
             print("Extraction aborted")
@@ -460,8 +465,12 @@ class call_e:
         Returns:
             None
         """
+        # if dbg_idx != 0:
+        #     print(f'killing thread {dbg_idx}')
+        #     return
+            
         # register thread
-        sf_group.pjsua_endpoint.libRegisterThread("softphone_listen")
+        sf_group.pjsua_endpoint.libRegisterThread(f"softphone_listen")
 
         try:
             print("Listening...")
@@ -469,22 +478,33 @@ class call_e:
             while not sf.has_picked_up_call():
                 if not sf_group.is_listening:
                     return
+                time.sleep(1)
                 pass
 
-            print("Incoming call. Setting up extractor.")
+            print(f"Incoming call on softphone {sf.get_id()}. Setting up extractor.")
 
             extractor = LLMExtractor(incoming_conversation_config, softphone=sf)
-            extractor_response = extractor.run_extraction_step("")
-            sf.say(extractor_response)
+            extractor_responses = extractor.run_extraction_step("")
+            for response in extractor_responses:
+                cache_audio = True if response[1] == "read" else False
+                sf.say(response[0], cache_audio=cache_audio)
 
             while (
                 extractor.get_status() == ExtractionStatus.IN_PROGRESS
                 and sf.has_picked_up_call()
             ):
                 user_input = sf.listen()
+                
+                # user input is empty if listening couldn`t be performed. Could be due to call interruption or holding the call for too long.
+                if user_input == "":
+                    sf.hangup()
+                    print("Call interrupted during listening.")
+                
                 sf.play_audio(str(HERE / "../resources/processing.wav"))
-                extractor_response = extractor.run_extraction_step(user_input)
-                sf.say(extractor_response)
+                extractor_responses = extractor.run_extraction_step(user_input)
+                for response in extractor_responses:
+                    cache_audio = True if response[1] == "read" else False
+                    sf.say(response[0], cache_audio=cache_audio)
 
             if extractor.get_status() != ExtractionStatus.COMPLETED:
                 print("Extraction aborted")
@@ -507,6 +527,7 @@ class call_e:
             args=(sf, sf_group, incoming_conversation_config),
         )
         listen_thread.start()
+        
 
     def start_listening(self, conversation_path, num_devices=1):
         """
