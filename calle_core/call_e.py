@@ -276,9 +276,11 @@ class call_e:
         print("Call picked up. Setting up extractor.")
 
         extractor = LLMExtractor(conversation_config, softphone=sf)
-        extractor_response = extractor.run_extraction_step("")
-        conversation_log += "Call-E: " + extractor_response + "\n"
-        sf.say(extractor_response)
+        extractor_responses = extractor.run_extraction_step("")
+        conversation_log += "Call-E: " + " ".join([response[0] for response in extractor_responses]) + "\n"
+        for response in extractor_responses:
+            cache_audio = True if response[1] == "read" else False
+            sf.say(response[0], cache_audio=cache_audio)
 
         while (
             extractor.get_status() == ExtractionStatus.IN_PROGRESS
@@ -287,9 +289,11 @@ class call_e:
             user_input = sf.listen()
             sf.play_audio(str(HERE / "../resources/processing.wav"))
             conversation_log += "User: " + user_input + "\n"
-            extractor_response = extractor.run_extraction_step(user_input)
-            conversation_log += "Call-E: " + extractor_response + "\n"
-            sf.say(extractor_response)
+            extractor_responses = extractor.run_extraction_step(user_input)
+            conversation_log += "Call-E: " + " ".join([response[0] for response in extractor_responses]) + "\n"
+            for response in extractor_responses:
+                cache_audio = True if response[1] == "read" else False
+                sf.say(response[0], cache_audio=cache_audio)
 
         if extractor.get_status() != ExtractionStatus.COMPLETED:
             print("Extraction aborted")
@@ -480,8 +484,10 @@ class call_e:
             print(f"Incoming call on softphone {sf.get_id()}. Setting up extractor.")
 
             extractor = LLMExtractor(incoming_conversation_config, softphone=sf)
-            extractor_response = extractor.run_extraction_step("")
-            sf.say(extractor_response)
+            extractor_responses = extractor.run_extraction_step("")
+            for response in extractor_responses:
+                cache_audio = True if response[1] == "read" else False
+                sf.say(response[0], cache_audio=cache_audio)
 
             while (
                 extractor.get_status() == ExtractionStatus.IN_PROGRESS
@@ -495,9 +501,10 @@ class call_e:
                     print("Call interrupted during listening.")
                 
                 sf.play_audio(str(HERE / "../resources/processing.wav"))
-                extractor_response = extractor.run_extraction_step(user_input)
-                sf.say(extractor_response)
-
+                extractor_responses = extractor.run_extraction_step(user_input)
+                for response in extractor_responses:
+                    cache_audio = True if response[1] == "read" else False
+                    sf.say(response[0], cache_audio=cache_audio)
 
             if extractor.get_status() != ExtractionStatus.COMPLETED:
                 print("Extraction aborted")

@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -128,6 +129,10 @@ class Softphone:
 
         # Initialize OpenAI
         self.__openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+        
+        # Ensure cache directory exists
+        if not os.path.exists(HERE / "../cache"):
+            os.makedirs(HERE / "../cache")
 
     def __del__(self):
         self.__media_player_1 = None
@@ -381,8 +386,22 @@ class Softphone:
             self.active_call = None
 
         self.__remove_artifacts()
+        
+    def __get_message_hash(self, message):
+        """
+        Calculate the hash of a given string message using SHA-256.
 
-    def say(self, message):
+        Args:
+            message (str): The input string to hash.
+
+        Returns:
+            str: The hexadecimal representation of the hash.
+        """
+        sha256_generator = hashlib.sha256()
+        sha256_generator.update(message.encode('utf-8'))
+        return sha256_generator.hexdigest()
+
+    def say(self, message, cache_audio=False):
         """
         Read out a message as audio to the active call.
 
@@ -398,7 +417,8 @@ class Softphone:
         if self.__paired_call:
             print("Can't say: Call is in forwarding session.")
             return
-
+        
+        # Setup audio media
         call_info = self.active_call.getInfo()
         for i in range(len(call_info.media)):
             if (
@@ -406,7 +426,26 @@ class Softphone:
                 and call_info.media[i].status == pj.PJSUA_CALL_MEDIA_ACTIVE
             ):
                 call_media = self.active_call.getAudioMedia(i)
+                
+                # -- Scan for cached audio file --
+                message_hash = self.__get_message_hash(message)
+                cached_audio_path = os.path.join(HERE / "../cache", f"{message_hash}.wav")
+                if os.path.isfile(cached_audio_path):
+                    if self.__media_player_1:
+                        self.__media_player_1.stopTransmit(call_media)
+                    if self.__media_player_2:
+                        self.__media_player_2.stopTransmit(call_media)
 
+                    cached_audio = AudioSegment.from_wav(str(cached_audio_path))
+                    self.__media_player_1 = pj.AudioMediaPlayer()
+                    self.__media_player_1.createPlayer(str(cached_audio_path), pj.PJMEDIA_FILE_NO_LOOP)
+                    self.__media_player_1.startTransmit(call_media)
+                    
+                    time.sleep(cached_audio.duration_seconds)
+                    
+                    self.__media_player_1.stopTransmit(call_media)
+                    return
+                
                 # -- Recieve TTS audio from OpenAI and stream it using double buffering --
                 # Setup buffer files
                 try:
@@ -435,6 +474,8 @@ class Softphone:
                         * self.__config["tts_sample_width"]
                         * self.__config["tts_channels"]
                     )  # length of each chunk in seconds
+                    
+                    combined_audio = AudioSegment.empty()
 
                     with self.__openai_client.audio.speech.with_streaming_response.create(
                         model="tts-1",
@@ -449,6 +490,7 @@ class Softphone:
                             if chunk and len(chunk) >= 512:
                                 if buffer_switch:
                                     buffer_switch = False
+                                    # play audio from buffer 0
                                     if self.__media_player_2:
                                         self.__media_player_2.stopTransmit(call_media)
                                     self.__media_player_1 = pj.AudioMediaPlayer()
@@ -460,7 +502,17 @@ class Softphone:
                                         pj.PJMEDIA_FILE_NO_LOOP,
                                     )
                                     self.__media_player_1.startTransmit(call_media)
-
+                                    
+                                    # append buffer audio to combined audio
+                                    buffered_audio = AudioSegment.from_wav(
+                                        str(
+                                            HERE
+                                            / f"../artifacts/{self.__id}_outgoing_buffer_0.wav"
+                                        )
+                                    )
+                                    combined_audio += buffered_audio
+                                         
+                                    # write audio to buffer 1
                                     with wave.open(
                                         str(
                                             HERE
@@ -481,6 +533,7 @@ class Softphone:
                                         time.sleep(delay)
                                 else:
                                     buffer_switch = True
+                                    # play audio from buffer 1
                                     if self.__media_player_1:
                                         self.__media_player_1.stopTransmit(call_media)
                                     self.__media_player_2 = pj.AudioMediaPlayer()
@@ -492,6 +545,17 @@ class Softphone:
                                         pj.PJMEDIA_FILE_NO_LOOP,
                                     )
                                     self.__media_player_2.startTransmit(call_media)
+                                    
+                                    # append buffer audio to combined audio
+                                    buffered_audio = AudioSegment.from_wav(
+                                        str(
+                                            HERE
+                                            / f"../artifacts/{self.__id}_outgoing_buffer_1.wav"
+                                        )
+                                    )
+                                    combined_audio += buffered_audio
+                                    
+                                    # write audio to buffer 0
                                     with wave.open(
                                         str(
                                             HERE
@@ -511,6 +575,10 @@ class Softphone:
                                         buffer_0.writeframes(chunk)
                                         time.sleep(delay)
 
+                        # save cache file
+                        if cache_audio:
+                            combined_audio.export(str(cached_audio_path), format="wav")
+                            
                         time.sleep(delay)
                         # play residue audio from last buffer
                         # try:

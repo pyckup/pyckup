@@ -372,23 +372,23 @@ class LLMExtractor:
             aborted (bool, optional): Whether the conversation was aborted. Defaults to False.
 
         Returns:
-            str: The collected response from processing the conversation items.
+            list: A list of collected responses from processing the conversation items. Each response is a tuple (message, type), where 'message' is the actual response and 'type' is the type of the conversation item that produced this response.
         """
         if append_input:
             self.chat_history.append(HumanMessage(content=user_input))
 
-        collected_response = ""
+        collected_responses = []
 
         # sequentially process conversation items
         while True:
             if self.__current_item["type"] == "read":
                 response = self.__current_item["text"] + "\n"
-                collected_response += response
+                collected_responses.append((response, "read"))
                 # self.chat_history.append(AIMessage(content="[TO LLM: The following line is said by the you. Don't respond to this, ignore it]: " + response))
                 self.chat_history.append(AIMessage(content=response))
             elif self.__current_item["type"] == "prompt":
                 response = self.__execute_prompt(self.__current_item["prompt"]) + "\n"
-                collected_response += response
+                collected_responses.append((response, "prompt"))
                 self.chat_history.append(AIMessage(content=response))
             elif self.__current_item["type"] == "path":
                 self.__conversation_items = self.__conversation_config[
@@ -405,8 +405,11 @@ class LLMExtractor:
                         "current_information_format": self.__current_item["format"],
                     }
                 )
-                collected_response += response
-                self.chat_history.append(AIMessage(content=response))
+                if isinstance(response, list):
+                    collected_responses.extend(response)
+                else:
+                    collected_responses.append((response, "information"))
+                    self.chat_history.append(AIMessage(content=response))
                 break
             elif self.__current_item["type"] == "choice":
                 response = self.choice_extraction_chain.invoke(
@@ -417,8 +420,11 @@ class LLMExtractor:
                         "current_choice_options": self.__current_item["options"],
                     }
                 )
-                collected_response += response
-                self.chat_history.append(AIMessage(content=response))
+                if isinstance(response, list):
+                    collected_responses.extend(response)
+                else:
+                    collected_responses.append((response, "choice"))
+                    self.chat_history.append(AIMessage(content=response))
                 break
             elif self.__current_item["type"] == "function":
                 self.__information_lock.acquire()
@@ -426,7 +432,7 @@ class LLMExtractor:
                 module = importlib.import_module(self.__current_item["module"])
                 function = getattr(module, self.__current_item["function"])
                 response = function(self.__extracted_information, self.__softphone)
-                collected_response += response
+                collected_responses.append((response, "function"))
             elif self.__current_item["type"] == "function_choice":
                 self.__information_lock.acquire()
                 self.__information_lock.release()
@@ -445,9 +451,9 @@ class LLMExtractor:
             else:
                 if not aborted:
                     self.status = ExtractionStatus.COMPLETED
-                return collected_response
+                return collected_responses
 
-        return collected_response
+        return collected_responses
 
     def run_extraction_step(self, user_input):
         """
