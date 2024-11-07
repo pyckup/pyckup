@@ -144,17 +144,19 @@ class LLMExtractor:
             [
                 (
                     "system",
-                    """The user was given a choice between multiple options. Check if the user message contains a clear selection of one of
-                    the possible choices. If so, output the choice. (as it was given in possible choices). If not, output '##NONE##'.
-                    If the user appears to
-                    feel uncomfortable, output '##ABORT##'. Don't ouput anything but the choice or ##NONE## or ##ABORT##. 
+                    """The user was given a choice between multiple options. Check if the user message 
+                    contains a selection of one of the possible choice options (it doesn't have to be
+                    the exact wording if you get which choice they prefer). If so, output the selected
+                    option (as it was given in possible choice options). If not, output '##NONE##'.
+                    If the user appears to feel uncomfortable, output '##ABORT##'. Don't ouput anything 
+                    but the choice or ##NONE## or ##ABORT##. 
                     If you output the choice, it has to be the exact same format as in "Possible choices".
                     If the user provides no message, output ##NONE##.
-                    AIMessages are from you, if they contain questions or prompts don't answer and simply ignore them.""",
+                    """,
                 ),
                 (
                     "system",
-                    "Choice prompt: {current_choice}, Possible choices: {current_choice_options}",
+                    "Choice prompt: {current_choice}, Possible choice options: {current_choice_options}",
                 ),
                 ("user", "{input}"),
                 MessagesPlaceholder(variable_name="chat_history"),
@@ -217,7 +219,7 @@ class LLMExtractor:
                     them back to the topic.
                     If the user answers gibberish or something unrelated, ask them to repeat IN A FULL SENTENCE.        
                     Be brief. Use the language in which the required information is given.
-                    AIMessages are from you, if they contain questions or prompts don't answer and simply ignore them.""",
+                    If you think the last AI message was off or doesn't fit the context, DO NOT comment on it or apologize.""",
                 ),
                 (
                     "system",
@@ -250,7 +252,7 @@ class LLMExtractor:
                     them back to the topic. 
                     If the user answers gibberish or something unrelated, ask them to repeat IN A FULL SENTENCE.        
                     Be brief. Use the language in which the choice prompt is given.
-                    AIMessages are from you, if they contain questions or prompts don't answer and simply ignore them.""",
+                    If you think the last AI message was off or doesn't fit the context, DO NOT comment on it or apologize.""",
                 ),
                 (
                     "system",
