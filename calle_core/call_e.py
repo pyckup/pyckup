@@ -495,8 +495,8 @@ class call_e:
             ):
                 user_input = sf.listen()
                 
-                # user input is empty if listening couldn`t be performed. Could be due to call interruption or holding the call for too long.
-                if user_input == "":
+                # user input is ##INTERRUPTED## if listening couldn`t be performed. Could be due to call interruption or holding the call for too long.
+                if user_input == "##INTERRUPTED##":
                     sf.hangup()
                     print("Call interrupted during listening.")
                 
