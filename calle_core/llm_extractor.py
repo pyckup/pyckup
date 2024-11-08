@@ -106,7 +106,12 @@ class LLMExtractor:
         Returns:
             dict: The updated data dictionary with the 'information_verification_status' key added.
         """
-
+        
+        # If this method was triggered by a previous item, then the input can't be relevant for this extraction
+        if data["is_recursive"]:
+            data["information_verification_status"] = "NO"
+            return data
+        
         verification_prompt = ChatPromptTemplate.from_messages(
             [
                 (
@@ -140,6 +145,12 @@ class LLMExtractor:
         Returns:
             dict: The updated data dictionary with the 'choice' key added.
         """
+        
+        # If this method was triggered by a previous item, then the input can't be relevant for this extraction
+        if data["is_recursive"]:
+            data["choice"] = "##NONE##"
+            return data
+        
         verification_prompt = ChatPromptTemplate.from_messages(
             [
                 (
@@ -304,7 +315,7 @@ class LLMExtractor:
             self.status = ExtractionStatus.COMPLETED
             return ""
 
-        return self.__process_conversation_items(data["input"], append_input=False)
+        return self.__process_conversation_items(data["input"], is_recursive=True)
 
     def __choice_extraction_successful(self, data):
         """
@@ -319,7 +330,7 @@ class LLMExtractor:
         selected_choice = data["choice"]
         self.__conversation_items = self.__current_item["options"][selected_choice]
         self.__current_item = self.__conversation_items.pop(0)
-        return self.__process_conversation_items(data["input"], append_input=False)
+        return self.__process_conversation_items(data["input"], is_recursive=True)
 
     def __extraction_aborted(self, data):
         """
@@ -343,7 +354,7 @@ class LLMExtractor:
             return ""
 
         return self.__process_conversation_items(
-            data["input"], append_input=False, aborted=True
+            data["input"], is_recursive=True, aborted=True
         )
 
     def __execute_prompt(self, prompt):
@@ -366,20 +377,20 @@ class LLMExtractor:
         return prompt_chain.invoke({"chat_history": self.chat_history})
 
     def __process_conversation_items(
-        self, user_input, append_input=True, aborted=False
+        self, user_input, is_recursive=False, aborted=False
     ):
         """
         Process items of the current conversation sequentially based on their type and update the conversation flow.
 
         Args:
             user_input (str): The input provided by the user.
-            append_input (bool, optional): Whether to append the user input to the chat history. Defaults to True.
+            is_recursive (bool, optional): Whether method was called as part of a previous call. Defaults to False.
             aborted (bool, optional): Whether the conversation was aborted. Defaults to False.
 
         Returns:
             list: A list of collected responses from processing the conversation items. Each response is a tuple (message, type), where 'message' is the actual response and 'type' is the type of the conversation item that produced this response.
         """
-        if append_input:
+        if not is_recursive:
             self.chat_history.append(HumanMessage(content=user_input))
 
         collected_responses = []
@@ -408,6 +419,7 @@ class LLMExtractor:
                             "description"
                         ],
                         "current_information_format": self.__current_item["format"],
+                        "is_recursive": is_recursive,
                     }
                 )
                 if isinstance(response, list):
@@ -423,6 +435,7 @@ class LLMExtractor:
                         "chat_history": self.chat_history,
                         "current_choice": self.__current_item["choice"],
                         "current_choice_options": list(self.__current_item["options"].keys()),
+                        "is_recursive": is_recursive,
                     }
                 )
                 if isinstance(response, list):
@@ -471,7 +484,7 @@ class LLMExtractor:
             str: The generated response.
         """
         return self.__process_conversation_items(
-            user_input, append_input=True, aborted=False
+            user_input, is_recursive=False, aborted=False
         )
 
     def get_information(self):
