@@ -157,6 +157,8 @@ class LLMExtractor:
                 (
                     "system",
                     "Choice prompt: {current_choice}, Possible choice options: {current_choice_options}",
+                    # "Possible choice options: {current_choice_options}",
+
                 ),
                 ("user", "{input}"),
                 MessagesPlaceholder(variable_name="chat_history"),
@@ -241,7 +243,8 @@ class LLMExtractor:
         Returns:
             object: A lngchain subchain for choice extraction.
         """
-        choices = ", ".join(data["current_choice_options"].keys())
+        # choices = ", ".join(data["current_choice_options"].keys())
+        choices = ", ".join(data["current_choice_options"])
         extraction_prompt = ChatPromptTemplate.from_messages(
             [
                 (
@@ -314,7 +317,7 @@ class LLMExtractor:
             str: The result of processing the next conversation item.
         """
         selected_choice = data["choice"]
-        self.__conversation_items = data["current_choice_options"][selected_choice]
+        self.__conversation_items = self.__current_item["options"][selected_choice]
         self.__current_item = self.__conversation_items.pop(0)
         return self.__process_conversation_items(data["input"], append_input=False)
 
@@ -419,7 +422,7 @@ class LLMExtractor:
                         "input": user_input,
                         "chat_history": self.chat_history,
                         "current_choice": self.__current_item["choice"],
-                        "current_choice_options": self.__current_item["options"],
+                        "current_choice_options": list(self.__current_item["options"].keys()),
                     }
                 )
                 if isinstance(response, list):
