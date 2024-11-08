@@ -656,7 +656,7 @@ class Softphone:
         """
         # skip silence
         if not self.__record_incoming_audio(self.__config["silence_sample_interval"]):
-            return ""
+            return "##INTERRUPTED##"
 
         last_segment = AudioSegment.from_wav(
             str(HERE / f"../artifacts/{self.__id}_incoming.wav")
@@ -669,7 +669,7 @@ class Softphone:
             if not self.__record_incoming_audio(
                 self.__config["silence_sample_interval"]
             ):
-                return ""
+                return "##INTERRUPTED##"
             last_segment = AudioSegment.from_wav(
                 str(HERE / f"../artifacts/{self.__id}_incoming.wav")
             )
@@ -684,7 +684,7 @@ class Softphone:
             if not self.__record_incoming_audio(
                 self.__config["speaking_sample_interval"]
             ):
-                return ""
+                return "##INTERRUPTED##"
             last_segment = AudioSegment.from_wav(
                 str(HERE / f"../artifacts/{self.__id}_incoming.wav")
             )
