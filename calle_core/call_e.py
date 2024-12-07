@@ -286,7 +286,14 @@ class call_e:
             extractor.get_status() == ExtractionStatus.IN_PROGRESS
             and sf.has_picked_up_call()
         ):
+            time.sleep(0.5)
             user_input = sf.listen()
+            
+            # user input is ##INTERRUPTED## if listening couldn`t be performed. Could be due to call interruption or holding the call for too long.
+            if user_input == "##INTERRUPTED##":
+                sf.hangup()
+                print("Call interrupted during listening.")
+                    
             sf.play_audio(str(HERE / "../resources/processing.wav"))
             conversation_log += "User: " + user_input + "\n"
             extractor_responses = extractor.run_extraction_step(user_input)
@@ -465,9 +472,6 @@ class call_e:
         Returns:
             None
         """
-        # if dbg_idx != 0:
-        #     print(f'killing thread {dbg_idx}')
-        #     return
             
         # register thread
         sf_group.pjsua_endpoint.libRegisterThread(f"softphone_listen")
@@ -493,6 +497,7 @@ class call_e:
                 extractor.get_status() == ExtractionStatus.IN_PROGRESS
                 and sf.has_picked_up_call()
             ):
+                time.sleep(0.5)
                 user_input = sf.listen()
                 
                 # user input is ##INTERRUPTED## if listening couldn`t be performed. Could be due to call interruption or holding the call for too long.
