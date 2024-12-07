@@ -676,7 +676,12 @@ class Softphone:
 
         # record audio while over silence threshold
         combined_segments = last_segment
-        while last_segment.dBFS > self.__config["silence_threshold"]:
+        active_threshold = self.__config["silence_threshold"]
+        
+        while last_segment.dBFS > active_threshold:
+            
+            # adapt thrshold to current noise level
+            active_threshold = last_segment.dBFS - 5
 
             if not self.active_call or self.__paired_call:
                 return ""
