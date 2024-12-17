@@ -17,7 +17,7 @@ class call_e:
     db = None
 
     def __init__(
-        self, sip_credentials_path, db_path=None
+        self, sip_credentials_path, db_path=None, log_dir=None
     ):
         """
         Create an instance of the call_e class.
@@ -25,9 +25,11 @@ class call_e:
         Args:
             sip_credentials_path (str): The file path to the SIP credentials.
             db_path (str, optional): The file path to the database (will be created if it doesn't exist). If None, database functions can't be used. Defaults to None.    
+            log_dir (str, optional): The directory where logs will be saved. If None, loggin is disabled. Defaults to None.
             """
         self.__sip_credentials_path = sip_credentials_path
         self.__setup_db(db_path)
+        self.__log_dir = log_dir
 
     def __del__(self):
         if self.db is not None:
@@ -225,7 +227,7 @@ class call_e:
             conversation_config_path (str): The file path to the conversation configuration.
             phone_number (str, optional): The phone number to call. Defaults to None. Either this or contact_id must be provided.
             contact_id (int, optional): The contact ID to call. Defaults to None. Either this or phone_number must be provided.
-            enable_logging (bool, optional): Whether to enable logging of the conversation. Defaults to True.
+            enable_logging (bool, optional): Whether to save a log of the conversation. Only works if log_dir has been set. Defaults to True.
 
         Returns:
             None
@@ -234,6 +236,7 @@ class call_e:
             print("Couldn't make call: you either have to provide a phone number or a contact id.")
             return
         
+        enable_logging = self.__log_dir is not None and enable_logging
         conversation_log = ""
         conversation_config, conversation_title = self.setup_conversation(conversation_config_path)
         
@@ -340,6 +343,17 @@ class call_e:
                     [contact_id] + list(information.values()),
                 )
                 self.db.commit()
+        
+        # save log file
+        if enable_logging:
+            log_dir = Path(self.__log_dir)
+            timestamp = time.strftime("%Y%m%d-%H%M%S")
+            os.makedirs(log_dir, exist_ok=True)
+            with open(
+                log_dir / f"{phone_number}_{timestamp}.log",
+                "w",
+            ) as log_file:
+                log_file.write(conversation_log)
 
         # usually we would hang up here, but if the call is forwarded then should keep the connection open
         while sf.is_forwarded():
@@ -347,14 +361,6 @@ class call_e:
         sf.hangup()
         print("Call ended.")
 
-        # save log file
-        if enable_logging:
-            os.makedirs(HERE / "../logs", exist_ok=True)
-            with open(
-                HERE / f"../logs/{conversation_title}_{contact_id}.log",
-                "w",
-            ) as log_file:
-                log_file.write(conversation_log)
     
     def call_number(self, phone_number, conversation_config_path, enable_logging=True):
         """
@@ -459,7 +465,7 @@ class call_e:
 
             self.call_contact(contact_id, conversation_config_path)
 
-    def __softphone_listen(self, sf, sf_group, incoming_conversation_config):
+    def __softphone_listen(self, sf, sf_group, incoming_conversation_config, enable_logging=True):
         """
         Thread used for listening for incoming calls. A thread is created for each softphone of the group.
         After connection is made, call is handled according to the incoming conversation configuration.
@@ -468,6 +474,7 @@ class call_e:
             sf (Softphone): The softphone instance to use for the call.
             sf_group (SoftphoneGroup): The group of softphones to which the current softphone belongs.
             incoming_conversation_config (dict): The configuration for the incoming conversation.
+            enable_logging (bool, optional): Whether to save a log of the conversation. Only works if log_dir has been set. Defaults to True.
 
         Returns:
             None
@@ -475,6 +482,9 @@ class call_e:
             
         # register thread
         sf_group.pjsua_endpoint.libRegisterThread(f"softphone_listen")
+        
+        enable_logging = self.__log_dir is not None and enable_logging
+        conversation_log = ""
 
         try:
             print("Listening...")
@@ -489,6 +499,7 @@ class call_e:
 
             extractor = LLMExtractor(incoming_conversation_config, softphone=sf)
             extractor_responses = extractor.run_extraction_step("")
+            conversation_log += "Call-E: " + " ".join([response[0] for response in extractor_responses]) + "\n"
             for response in extractor_responses:
                 cache_audio = True if response[1] == "read" else False
                 sf.say(response[0], cache_audio=cache_audio)
@@ -506,7 +517,9 @@ class call_e:
                     print("Call interrupted during listening.")
                 
                 sf.play_audio(str(HERE / "../resources/processing.wav"))
+                conversation_log += "User: " + user_input + "\n"
                 extractor_responses = extractor.run_extraction_step(user_input)
+                conversation_log += "Call-E: " + " ".join([response[0] for response in extractor_responses]) + "\n"
                 for response in extractor_responses:
                     cache_audio = True if response[1] == "read" else False
                     sf.say(response[0], cache_audio=cache_audio)
@@ -515,6 +528,18 @@ class call_e:
                 print("Extraction aborted")
             else:
                 print("Extraction completed")
+                
+            # save log file
+            if enable_logging:
+                log_dir = Path(self.__log_dir)
+                phone_number = sf.active_call.getInfo().remoteUri.split("@")[0].split(":")[1]
+                timestamp = time.strftime("%Y%m%d-%H%M%S")
+                os.makedirs(log_dir, exist_ok=True)
+                with open(
+                    log_dir / f"{phone_number}_{timestamp}.log",
+                    "w",
+                ) as log_file:
+                    log_file.write(conversation_log)
 
             # usually we would hang up here, but if the call is forwarded then should keep the connection open
             while sf.is_forwarded():
@@ -529,18 +554,19 @@ class call_e:
         # restart thread after it was terminated (successful or not)
         listen_thread = threading.Thread(
             target=self.__softphone_listen,
-            args=(sf, sf_group, incoming_conversation_config),
+            args=(sf, sf_group, incoming_conversation_config, enable_logging),
         )
         listen_thread.start()
         
 
-    def start_listening(self, conversation_path, num_devices=1):
+    def start_listening(self, conversation_path, num_devices=1, enable_logging=True):
         """
         Start listening for incoming calls.
 
         Args:
             conversation_path (str): The file path to the conversation configuration YAML file.
             num_devices (int, optional): The number of softphone devices (= number of concurrent calls) to initialize. Defaults to 1.
+            enable_logging (bool, optional): Whether to save a log of the conversation. Only works if log_dir has been set. Defaults to True.
 
         Returns:
             SoftphoneGroup: The group of softphones that are listening for incoming calls.
@@ -553,7 +579,7 @@ class call_e:
             sf = Softphone(self.__sip_credentials_path, sf_group)
             listen_thread = threading.Thread(
                 target=self.__softphone_listen,
-                args=(sf, sf_group, incoming_conversation_config),
+                args=(sf, sf_group, incoming_conversation_config, enable_logging),
             )
             listen_thread.start()
         return sf_group
