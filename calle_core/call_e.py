@@ -4,6 +4,7 @@ from pathlib import Path
 import traceback
 import yaml
 from calle_core.llm_extractor import LLMExtractor, ExtractionStatus
+from calle_core.call_logging import log_message, setup_log
 from calle_core.softphone import Softphone, SoftphoneGroup
 import sqlite3
 import threading
@@ -219,6 +220,106 @@ class call_e:
 
         return {"num_attempts": status_data[2], "status": status_data[3]}
     
+    def __call_core_routine(self, softphone, conversation_config, is_outgoing, enable_logging=True, contact_id=None):
+        """
+        Core routine for handling a call.
+
+        Args:
+            softphone (Softphone): The softphone instance used for the call.
+            conversation_config (dict): The conversation configuration that is used.
+            is_outgoing (bool): Flag indicating if the call is outgoing.
+            enable_logging (bool, optional): Flag to enable or disable logging. Defaults to True.
+            contact_id (str, optional): The contact ID for the call. Only set if call is performed by call_contact(s). Defaults to None.
+
+        Returns:
+            None
+        """
+        do_db_updates = is_outgoing and contact_id is not None and self.db is not None
+        enable_logging = self.__log_dir is not None and enable_logging
+        phone_number = softphone.get_called_phone_number()
+
+        if enable_logging:
+            log_path = setup_log(self.__log_dir, phone_number)
+        
+        extractor = LLMExtractor(conversation_config, softphone=softphone)
+        extractor_responses = extractor.run_extraction_step("")
+        if enable_logging:
+            for response in extractor_responses:
+                log_message(log_path, response[0], role="Call-E")
+        for response in extractor_responses:
+            cache_audio = True if response[1] == "read" else False
+            softphone.say(response[0], cache_audio=cache_audio)
+
+        while (
+            extractor.get_status() == ExtractionStatus.IN_PROGRESS
+            and softphone.has_picked_up_call()
+        ):
+            time.sleep(0.5)
+            user_input = softphone.listen()
+            
+            # user input is ##INTERRUPTED## if listening couldn`t be performed. Could be due to call interruption or holding the call for too long.
+            if user_input == "##INTERRUPTED##":
+                softphone.hangup()
+                print("Call interrupted during listening.")
+                    
+            softphone.play_audio(str(HERE / "../resources/processing.wav"))
+            if enable_logging:
+                log_message(log_path, user_input, role="User")
+            extractor_responses = extractor.run_extraction_step(user_input)
+            if enable_logging:
+                for response in extractor_responses:
+                    log_message(log_path, response[0], role="Call-E")
+            for response in extractor_responses:
+                cache_audio = True if response[1] == "read" else False
+                softphone.say(response[0], cache_audio=cache_audio)
+
+        if extractor.get_status() != ExtractionStatus.COMPLETED:
+            print("Extraction aborted")
+
+            if do_db_updates:
+                cursor = self.db.cursor()
+                cursor.execute(
+                    f"""
+                UPDATE {conversation_title}_status SET status = "ABORTED" WHERE contact_id = ?
+                """,
+                    (contact_id,),
+                )
+                self.db.commit()
+        else:
+            # successful extraction, save results in db
+            print("Extraction completed")
+
+            if do_db_updates:
+                cursor = self.db.cursor()
+                cursor.execute(
+                    f"""
+                UPDATE {conversation_title}_status SET status = "COMPLETED" WHERE contact_id = ?
+                """,
+                    (contact_id,),
+                )
+
+                information = extractor.get_information()
+                cursor.execute(
+                    f"""
+                    INSERT OR REPLACE INTO {conversation_title} (
+                        contact_id, {', '.join([key.lower() for key in information.keys()])}
+                        )
+                    VALUES (
+                        ?, {', '.join(['?']*len(information))}
+                        )
+                """,
+                    [contact_id] + list(information.values()),
+                )
+                self.db.commit()
+
+            
+
+        # usually we would hang up here, but if the call is forwarded then should keep the connection open
+        while softphone.is_forwarded():
+            time.sleep(1)
+        softphone.hangup()
+        print("Call ended.")
+    
     def __perform_outgoing_call(self, conversation_config_path, phone_number=None, contact_id=None, enable_logging=True):
         """
         Perform an outgoing call to a specified phone number or contact ID. Wrapped by call_number and call_contact.
@@ -235,12 +336,10 @@ class call_e:
         if phone_number is None and contact_id is None:
             print("Couldn't make call: you either have to provide a phone number or a contact id.")
             return
-        
-        enable_logging = self.__log_dir is not None and enable_logging
-        conversation_log = ""
+                
         conversation_config, conversation_title = self.setup_conversation(conversation_config_path)
-        
-        if contact_id:
+
+        if contact_id and self.db is not None:
             contact = self.get_contact(contact_id)
             if not contact:
                 print("Couldn't make call: invalid contact id.")
@@ -277,91 +376,10 @@ class call_e:
             return
 
         print("Call picked up. Setting up extractor.")
-
-        extractor = LLMExtractor(conversation_config, softphone=sf)
-        extractor_responses = extractor.run_extraction_step("")
-        conversation_log += "Call-E: " + " ".join([response[0] for response in extractor_responses]) + "\n"
-        for response in extractor_responses:
-            cache_audio = True if response[1] == "read" else False
-            sf.say(response[0], cache_audio=cache_audio)
-
-        while (
-            extractor.get_status() == ExtractionStatus.IN_PROGRESS
-            and sf.has_picked_up_call()
-        ):
-            time.sleep(0.5)
-            user_input = sf.listen()
-            
-            # user input is ##INTERRUPTED## if listening couldn`t be performed. Could be due to call interruption or holding the call for too long.
-            if user_input == "##INTERRUPTED##":
-                sf.hangup()
-                print("Call interrupted during listening.")
-                    
-            sf.play_audio(str(HERE / "../resources/processing.wav"))
-            conversation_log += "User: " + user_input + "\n"
-            extractor_responses = extractor.run_extraction_step(user_input)
-            conversation_log += "Call-E: " + " ".join([response[0] for response in extractor_responses]) + "\n"
-            for response in extractor_responses:
-                cache_audio = True if response[1] == "read" else False
-                sf.say(response[0], cache_audio=cache_audio)
-
-        if extractor.get_status() != ExtractionStatus.COMPLETED:
-            print("Extraction aborted")
-
-            if contact_id:
-                cursor = self.db.cursor()
-                cursor.execute(
-                    f"""
-                UPDATE {conversation_title}_status SET status = "ABORTED" WHERE contact_id = ?
-                """,
-                    (contact_id,),
-                )
-                self.db.commit()
-        else:
-            # successful extraction, save results in db
-            print("Extraction completed")
-
-            if contact_id:
-                cursor = self.db.cursor()
-                cursor.execute(
-                    f"""
-                UPDATE {conversation_title}_status SET status = "COMPLETED" WHERE contact_id = ?
-                """,
-                    (contact_id,),
-                )
-
-                information = extractor.get_information()
-                cursor.execute(
-                    f"""
-                    INSERT OR REPLACE INTO {conversation_title} (
-                        contact_id, {', '.join([key.lower() for key in information.keys()])}
-                        )
-                    VALUES (
-                        ?, {', '.join(['?']*len(information))}
-                        )
-                """,
-                    [contact_id] + list(information.values()),
-                )
-                self.db.commit()
         
-        # save log file
-        if enable_logging:
-            log_dir = Path(self.__log_dir)
-            timestamp = time.strftime("%Y%m%d-%H%M%S")
-            os.makedirs(log_dir, exist_ok=True)
-            with open(
-                log_dir / f"{phone_number}_{timestamp}.log",
-                "w",
-            ) as log_file:
-                log_file.write(conversation_log)
+        self.__call_core_routine(sf, conversation_config, is_outgoing=True, enable_logging=enable_logging, contact_id=contact_id)
 
-        # usually we would hang up here, but if the call is forwarded then should keep the connection open
-        while sf.is_forwarded():
-            time.sleep(1)
-        sf.hangup()
-        print("Call ended.")
-
-    
+        
     def call_number(self, phone_number, conversation_config_path, enable_logging=True):
         """
         Initiate a call to a phone number and lead recipient through the current outgoing conversation.
@@ -473,7 +491,7 @@ class call_e:
         Args:
             sf (Softphone): The softphone instance to use for the call.
             sf_group (SoftphoneGroup): The group of softphones to which the current softphone belongs.
-            incoming_conversation_config (dict): The configuration for the incoming conversation.
+            incoming_conversation_config (str): The configuration for the incoming conversation.
             enable_logging (bool, optional): Whether to save a log of the conversation. Only works if log_dir has been set. Defaults to True.
 
         Returns:
@@ -482,9 +500,6 @@ class call_e:
             
         # register thread
         sf_group.pjsua_endpoint.libRegisterThread(f"softphone_listen")
-        
-        enable_logging = self.__log_dir is not None and enable_logging
-        conversation_log = ""
 
         try:
             print("Listening...")
@@ -497,55 +512,7 @@ class call_e:
 
             print(f"Incoming call on softphone {sf.get_id()}. Setting up extractor.")
 
-            extractor = LLMExtractor(incoming_conversation_config, softphone=sf)
-            extractor_responses = extractor.run_extraction_step("")
-            conversation_log += "Call-E: " + " ".join([response[0] for response in extractor_responses]) + "\n"
-            for response in extractor_responses:
-                cache_audio = True if response[1] == "read" else False
-                sf.say(response[0], cache_audio=cache_audio)
-
-            while (
-                extractor.get_status() == ExtractionStatus.IN_PROGRESS
-                and sf.has_picked_up_call()
-            ):
-                time.sleep(0.5)
-                user_input = sf.listen()
-                
-                # user input is ##INTERRUPTED## if listening couldn`t be performed. Could be due to call interruption or holding the call for too long.
-                if user_input == "##INTERRUPTED##":
-                    sf.hangup()
-                    print("Call interrupted during listening.")
-                
-                sf.play_audio(str(HERE / "../resources/processing.wav"))
-                conversation_log += "User: " + user_input + "\n"
-                extractor_responses = extractor.run_extraction_step(user_input)
-                conversation_log += "Call-E: " + " ".join([response[0] for response in extractor_responses]) + "\n"
-                for response in extractor_responses:
-                    cache_audio = True if response[1] == "read" else False
-                    sf.say(response[0], cache_audio=cache_audio)
-
-            if extractor.get_status() != ExtractionStatus.COMPLETED:
-                print("Extraction aborted")
-            else:
-                print("Extraction completed")
-                
-            # save log file
-            if enable_logging:
-                log_dir = Path(self.__log_dir)
-                phone_number = sf.active_call.getInfo().remoteUri.split("@")[0].split(":")[1]
-                timestamp = time.strftime("%Y%m%d-%H%M%S")
-                os.makedirs(log_dir, exist_ok=True)
-                with open(
-                    log_dir / f"{phone_number}_{timestamp}.log",
-                    "w",
-                ) as log_file:
-                    log_file.write(conversation_log)
-
-            # usually we would hang up here, but if the call is forwarded then should keep the connection open
-            while sf.is_forwarded():
-                time.sleep(1)
-            sf.hangup()
-            print("Call ended.")
+            self.__call_core_routine(sf, incoming_conversation_config, is_outgoing=False, enable_logging=enable_logging)
         except Exception as e:
             print("Exception in listening thread:", e)
             traceback.print_exc()
@@ -559,7 +526,7 @@ class call_e:
         listen_thread.start()
         
 
-    def start_listening(self, conversation_path, num_devices=1, enable_logging=True):
+    def start_listening(self, conversation_config_path, num_devices=1, enable_logging=True):
         """
         Start listening for incoming calls.
 
@@ -571,15 +538,14 @@ class call_e:
         Returns:
             SoftphoneGroup: The group of softphones that are listening for incoming calls.
         """
-        incoming_conversation_config = self.__read_conversation_config(
-            conversation_path
-        )
+        conversation_config, conversation_title = self.setup_conversation(conversation_config_path)
+
         sf_group = SoftphoneGroup(self.__sip_credentials_path)
         for i in range(num_devices):
             sf = Softphone(self.__sip_credentials_path, sf_group)
             listen_thread = threading.Thread(
                 target=self.__softphone_listen,
-                args=(sf, sf_group, incoming_conversation_config, enable_logging),
+                args=(sf, sf_group, conversation_config, enable_logging),
             )
             listen_thread.start()
         return sf_group

@@ -313,6 +313,20 @@ class Softphone:
             bool: True if the paired call has been picked up, otherwise False.
         """
         return self.__has_picked_up_call("paired")
+    
+    def get_called_phone_number(self):
+        """
+        Get the phone number of the active call.
+
+        Returns:
+            str: The phone number of the active call.
+        """
+        if not self.active_call:
+            print("Can't get called phone number: No active call.")
+            return None
+        
+        return self.active_call.getInfo().remoteUri.split("@")[0].split(":")[1]
+
 
     def __wait_for_stop_calling(self, call_type="active", timeout=None):
         """
