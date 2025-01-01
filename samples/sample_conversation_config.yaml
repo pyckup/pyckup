@@ -8,6 +8,7 @@ conversation_paths:
       title: name
       description: The first name of the user. 
       format: The first name of the user, starting with a capital letter.
+      interactive: false
     - type: function_choice # call a function from the provided module. Return value determines the path chosen.
       module: samples.sample_trunks
       function: name_is_marius
