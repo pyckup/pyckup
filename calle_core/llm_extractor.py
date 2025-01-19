@@ -53,6 +53,7 @@ class LLMExtractor:
         self.__load_conversation_path("entry")
         self.__extracted_information = {}
         self.__information_lock = threading.Lock()
+        self.__repeat_item = None # if information filtering failed, the item is repeated
 
         self.__softphone = softphone
 
@@ -178,6 +179,7 @@ class LLMExtractor:
         verifyer_chain = verification_prompt | self.__llm | StrOutputParser()
         data["choice"] = verifyer_chain.invoke(data).strip()
         return data
+    
 
     def __filter_information(self, data):
         """
@@ -229,7 +231,7 @@ class LLMExtractor:
                     "system",
                     """Extract different pieces of information from the user. Have a casual conversation tone but stay on topic.
                     If the user derivates from the topic of the information you want to have, gently guide 
-                    them back to the topic.
+                    them back to the topic. 
                     If the user answers gibberish or something unrelated, ask them to repeat IN A FULL SENTENCE.        
                     Be brief. Use the language in which the required information is given.
                     If you think the last AI message was off or doesn't fit the context, DO NOT comment on it or apologize.""",
@@ -278,19 +280,26 @@ class LLMExtractor:
         choice_extractor = extraction_prompt | self.__llm | StrOutputParser()
         return choice_extractor
 
-    def __append_filtered_info(self, data, title):
+    def __append_filtered_info(self, data, information_item):
         """
         Append filtered information thread-safely to the extracted information dictionary.
 
         Args:
             data (dict): Langchain conversation data.
-            title (str): The title under which the filtered information will be stored.
+            information_item (dict): The conversation item that required the information.
 
         Returns:
             None
         """
         self.__information_lock.acquire()
-        self.__extracted_information[title] = self.__filter_information(data)
+        filtered_info = self.__filter_information(data)
+        if filtered_info:
+            self.__extracted_information[information_item['title']] = filtered_info
+            self.__repeat_item = None
+        else:
+            # information couldn't be extracted, so repeat the item at next possibility
+            self.__repeat_item = information_item
+            
         self.__information_lock.release()
 
     def __information_extraction_successful(self, data):
@@ -305,7 +314,7 @@ class LLMExtractor:
 
         thread = threading.Thread(
             target=self.__append_filtered_info,
-            args=(data, self.__current_item["title"]),
+            args=(data, self.__current_item),
         )
         thread.start()
 
@@ -375,6 +384,40 @@ class LLMExtractor:
         )
         prompt_chain = prompt_template | self.__llm | StrOutputParser()
         return prompt_chain.invoke({"chat_history": self.chat_history})
+    
+    def __check_item_repetition(self):
+        """
+        Check if an item needs to be repeated and insert it at the beginning of the conversation queue.
+
+        Returns:
+            None
+        """
+        if not self.__repeat_item:
+            return
+        
+        print("repeat")
+        
+        # inform user that we need a piece of info again
+        repeat_prompt_item = {
+            "type": "prompt",
+            "prompt": "Say (in the current language) that you need to ask again for an information. It doesnt matter if the info is already in the conversation.",
+            "interactive": True
+        }
+        self.__conversation_items.insert(0, self.__current_item)
+        self.__conversation_items.insert(0, self.__repeat_item)
+        self.__current_item = repeat_prompt_item
+        self.__repeat_item = None
+    
+    def __get_information_lock(self):
+        """
+        Acquire and release the information lock.
+
+        Returns:
+            bool: True if state of information dict is valid, i.e. no repitition needs to be performed, False otherwise.
+        """
+        self.__information_lock.acquire()
+        self.__information_lock.release()
+        return not self.__repeat_item
 
     def __process_conversation_items(
         self, user_input, is_recursive=False, aborted=False
@@ -397,6 +440,9 @@ class LLMExtractor:
 
         # sequentially process conversation items
         while True:
+            # check if conversation item needs to be repeated
+            self.__check_item_repetition()
+            
             if self.__current_item["type"] == "read":
                 response = self.__current_item["text"] + "\n"
                 collected_responses.append((response, "read"))
@@ -445,15 +491,19 @@ class LLMExtractor:
                     self.chat_history.append(AIMessage(content=response))
                 break
             elif self.__current_item["type"] == "function":
-                self.__information_lock.acquire()
-                self.__information_lock.release()
+                information_is_valid = self.__get_information_lock()
+                if not information_is_valid:
+                    continue
+            
                 module = importlib.import_module(self.__current_item["module"])
                 function = getattr(module, self.__current_item["function"])
                 response = function(self.__extracted_information, self.__softphone)
                 collected_responses.append((response, "function"))
             elif self.__current_item["type"] == "function_choice":
-                self.__information_lock.acquire()
-                self.__information_lock.release()
+                information_is_valid = self.__get_information_lock()
+                if not information_is_valid:
+                    continue
+                
                 module = importlib.import_module(self.__current_item["module"])
                 function = getattr(module, self.__current_item["function"])
                 choice = function(self.__extracted_information, self.__softphone)
