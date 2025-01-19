@@ -1,6 +1,9 @@
+import base64
 import copy
+import json
 import os
 from pathlib import Path
+import time
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.output_parsers.string import StrOutputParser
@@ -10,6 +13,7 @@ from langchain_community.llms import Ollama
 from enum import Enum
 import threading
 import importlib
+import websocket
 
 
 HERE = Path(os.path.abspath(__file__)).parent
@@ -36,7 +40,7 @@ class LLMExtractor:
         choice_extraction_chain (RunnableBranch): The langchain chain of operations for choice extraction.
     """
 
-    def __init__(self, conversation_config, llm_provider="openai", softphone=None):
+    def __init__(self, conversation_config, llm_provider="openai", softphone=None, realtime=True, incoming_buffer=None, outgoing_buffer=None):
         if llm_provider == "openai":
             self.__llm = ChatOpenAI(
                 api_key=os.environ["OPENAI_API_KEY"], model="gpt-4-turbo-preview"
@@ -80,6 +84,87 @@ class LLMExtractor:
             ),
             self.__choice_extraction_successful,
         )
+        
+        # realtime stuff
+        self.__realtime = realtime
+        self.__realtime_connection = None
+        self.__incoming_buffer = incoming_buffer
+        self.__outgoing_buffer = outgoing_buffer
+        self.__current_item_messages = []
+        self.__current_item_callback_args = ""
+        self.__current_item_in_progress = False
+        
+        threading.Thread(target=self.__run_realtime_client).start()
+        threading.Thread(target=self.__send_outgoing_buffer).start()
+        
+    def __run_realtime_client(self):
+        def on_open(ws):
+            # set up session parameters
+            event = {
+                "type": "session.update",
+                "session": {
+                    "modalities": ["text", "audio"],
+                    "instructions": "You will lead the user through a conversation, where the current topic is given through system prompts to you. Don't say anything in the beginning.",
+                    "input_audio_format": "pcm16",
+                    "output_audio_format": "pcm16",
+                    "turn_detection": None,
+                    "tools": [],
+                    "input_audio_transcription": {
+                        "model": "whisper-1"
+                    },
+                }
+            }
+            self.ws.send(json.dumps(event))
+         
+    
+        def on_message(ws, message):
+            server_event = json.loads(message)
+            if server_event['type'] == "response.audio.delta":
+                # append incoming audio to buffer
+                encoded_audio = server_event['delta']
+                audio_bytes = base64.b64decode(encoded_audio)
+                self.__incoming_buffer.put(audio_bytes)  
+            elif server_event['type'] == "response.done":
+                # track transcribed model output
+                model_response = server_event['response']['output'][0]['content'][0]['transcript']
+                self.__current_item_messages.append(AIMessage(content=model_response))
+            elif server_event['type'] == "conversation.item.input_audio_transcription.completed":
+                # track transcribed user input
+                user_input = server_event['transcript']
+                self.__current_item_messages.append(HumanMessage(content=user_input))
+            elif server_event['type'] == "response.function_call_arguments.done":
+                # callback sent from model
+                self.__current_item_callback_args = json.loads(server_event['arguments'])
+                self.__current_item_in_progress = False
+            
+        api_url = "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17"
+        headers = [
+            f"Authorization: Bearer {os.environ["OPENAI_API_KEY"]}",
+            "OpenAI-Beta: realtime=v1"
+        ]
+        
+        self.__realtime_connection = websocket.WebSocketApp(
+            api_url,
+            header=headers,
+            on_message=on_message,
+            on_error=lambda ws, error: print(f"An error occured in OpenAI realtime connection: {error}"),
+        )
+        self.__realtime_connection.on_open = on_open
+        self.__realtime_connection.run_forever()
+    
+    def __send_outgoing_buffer(self):
+        while self.status == ExtractionStatus.IN_PROGRESS:
+            if self.__realtime_connection is None:
+                time.sleep(0.2)
+                continue
+        
+            audio_bytes = self.outgoing_buffer.get()
+            encoded_audio = base64.b64encode(audio_bytes).decode('utf-8')            
+            event = {
+                "type": "input_audio_buffer.append",
+                "audio": encoded_audio
+            }
+            self.__realtime_connection.send(json.dumps(event))
 
     def __load_conversation_path(self, conversation_path):
         """
@@ -418,6 +503,250 @@ class LLMExtractor:
         self.__information_lock.acquire()
         self.__information_lock.release()
         return not self.__repeat_item
+    
+    def __wait_for_model_callback(self):
+        self.__current_item_messages = []
+        self.__current_item_callback_args = None
+        self.__current_item_in_progress = True
+        
+        # wait until callback by model
+        while self.__current_item_in_progress:
+            time.sleep(0.2)
+            
+        chat_messages = self.__current_item_messages
+        args = self.__current_item_callback_args
+        
+        return chat_messages, args
+        
+    
+    def __process_read_item(self, item):
+        response_text = item["text"] + "\n"
+        responses = [(response_text, "read")]
+        chat_messages = [AIMessage(content=response_text)]
+        requires_interaction = self.__realtime
+
+        return responses, chat_messages, requires_interaction
+    
+    def __process_prompt_item(self, item):
+        if self.__realtime:
+            raise NotImplementedError()
+        else:
+            response_text = self.__execute_prompt(item["prompt"]) + "\n"
+            responses = [(response_text, "prompt")]
+            chat_messages = [AIMessage(content=response_text)]
+            
+        return responses, chat_messages, False
+    
+    def __process_path_item(self, item):
+        self.__conversation_items = self.__conversation_config[
+                    "conversation_paths"
+                ][item["path"]]
+            
+        return [], [], False
+
+    def __process_information_item(self, item, user_input, is_recursive):
+        if self.__realtime:
+            # enable VAD, define callback function
+            session_update_event = {
+                "type": "session.update",
+                "session": {
+                    "turn_detection": {
+                        "type": "server_vad",
+                        "threshold": 0.5,
+                        "prefix_padding_ms": 300,
+                        "silence_duration_ms": 500,
+                        "create_response": True
+                    },
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": "information_callback",
+                            "description": f"Call this function once you have sucessfully extracted the information from the user. Provide as a parameter the extracted information. The parameter should be in the following format: {item['format']}",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "information": { "type": "string" }
+                                },
+                                "required": ["information"]
+                            }
+                        }
+                    ],
+                }
+            }
+            self.__realtime_connection.send(json.dumps(session_update_event))
+            
+            # instruct the model to extract information
+            conversation_item_event = {
+                "type": "conversation.item.create",
+                "item": {
+                    "type": "message",
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": f"Extract a piece of information from the user. If the user derivates from the topic, lead them gently back to it. Required information: {item['description']}",
+                        }
+                    ]
+                }
+            }
+            self.__realtime_connection.send(json.dumps(conversation_item_event))
+
+            # initiate a model response
+            response_event = {
+                "type": "response.create",
+                "response": {
+                    "modalities": [ "text", "audio" ],
+                }
+            }
+            self.__realtime_connection.send(json.dumps(response_event))
+            
+            callback_args, chat_messages = self.__wait_for_model_callback()
+            
+            # extract information from callback
+            # TODO: we assume model ouputs always right args. Maybe introduce a null check and handle by repeating, as in the non-realtime case
+            information = callback_args["information"]
+            self.__information_lock.acquire()
+            self.__extracted_information[item['title']] = information
+            self.__repeat_item = None
+            self.__information_lock.release()
+    
+            responses = [("Realtime Conversation", "information")]
+            requires_interaction = False
+        else:
+            # NON-REALTIME CASE
+            response = self.information_extraction_chain.invoke(
+                {
+                    "input": user_input,
+                    "chat_history": self.chat_history,
+                    "current_information_description": item[
+                        "description"
+                    ],
+                    "current_information_format": item["format"],
+                    "is_recursive": is_recursive,
+                }
+            )
+            if isinstance(response, list):
+                responses = response
+                chat_messages = []
+            else:
+                responses = [(response, "information")]
+                chat_messages = [AIMessage(content=response)]
+            requires_interaction = True
+            
+        return responses, chat_messages, requires_interaction
+    
+    def __process_choice_item(self, item, user_input, is_recursive):
+        if self.__realtime:
+            # enable VAD, define callback function
+            session_update_event = {
+                "type": "session.update",
+                "session": {
+                    "turn_detection": {
+                        "type": "server_vad",
+                        "threshold": 0.5,
+                        "prefix_padding_ms": 300,
+                        "silence_duration_ms": 500,
+                        "create_response": True
+                    },
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": "choice_callback",
+                            "description": f"Call this function once you have sucessfully extracted the selected choice, which should be only one of the following: {item["options"].keys()}",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "choice": { "type": "string" }
+                                },
+                                "required": ["choice"]
+                            }
+                        }
+                    ],
+                }
+            }
+            self.__realtime_connection.send(json.dumps(session_update_event))
+            
+            # instruct the model to extract information
+            conversation_item_event = {
+                "type": "conversation.item.create",
+                "item": {
+                    "type": "message",
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": f"Extract a choice from multiple options from the user. If the user derivates from the topic, lead them gently back to it. Possible choices: {item["options"].keys()}",
+                        }
+                    ]
+                }
+            }
+            self.__realtime_connection.send(json.dumps(conversation_item_event))
+
+            # initiate a model response
+            response_event = {
+                "type": "response.create",
+                "response": {
+                    "modalities": [ "text", "audio" ],
+                }
+            }
+            self.__realtime_connection.send(json.dumps(response_event))
+            
+            callback_args, chat_messages = self.__wait_for_model_callback()
+            
+            # extract choice and update conversation path accordingly
+            # TODO: we assume model ouputs always right args. Maybe introduce a null check and handle by repeating, as in the non-realtime case
+            selected_choice = callback_args["choice"]
+            self.__conversation_items = item["options"][selected_choice]
+            self.__current_item = self.__conversation_items.pop(0)
+    
+            responses = [("Realtime Conversation", "choice")]
+            requires_interaction = False
+        else:
+            # NON-REALTIME CASE
+            response = self.choice_extraction_chain.invoke(
+                    {
+                        "input": user_input,
+                        "chat_history": self.chat_history,
+                        "current_choice": item["choice"],
+                        "current_choice_options": list(item["options"].keys()),
+                        "is_recursive": is_recursive,
+                    }
+                )
+            if isinstance(response, list):
+                responses = response
+                chat_messages = []
+            else:
+                responses = [(response, "choice")]
+                chat_messages = [AIMessage(content=response)]
+            requires_interaction = True
+            
+        return responses, chat_messages, requires_interaction
+    
+    def __process_function_item(self, item):
+        information_is_valid = self.__get_information_lock()
+        if not information_is_valid:
+            return [], [], False
+    
+        module = importlib.import_module(item["module"])
+        function = getattr(module, item["function"])
+        response_text = function(self.__extracted_information, self.__softphone)
+        if response_text:
+            responses = [(response_text, "function")]
+            chat_messages = [AIMessage(content=response_text)]
+            
+        return responses, chat_messages, False
+    
+    def __process_function_choice_item(self, item):
+        information_is_valid = self.__get_information_lock()
+        if not information_is_valid:
+            return [], [], False
+                
+        module = importlib.import_module(item["module"])
+        function = getattr(module, item["function"])
+        choice = function(self.__extracted_information, self.__softphone)
+        self.__conversation_items = item["options"][choice]
+            
+        return [], [], False
 
     def __process_conversation_items(
         self, user_input, is_recursive=False, aborted=False
@@ -444,71 +773,25 @@ class LLMExtractor:
             self.__check_item_repetition()
             
             if self.__current_item["type"] == "read":
-                response = self.__current_item["text"] + "\n"
-                collected_responses.append((response, "read"))
-                # self.chat_history.append(AIMessage(content="[TO LLM: The following line is said by the you. Don't respond to this, ignore it]: " + response))
-                self.chat_history.append(AIMessage(content=response))
+                responses, chat_messages, requires_interaction = self.__process_read_item(self.__current_item)
             elif self.__current_item["type"] == "prompt":
-                response = self.__execute_prompt(self.__current_item["prompt"]) + "\n"
-                collected_responses.append((response, "prompt"))
-                self.chat_history.append(AIMessage(content=response))
+                responses, chat_messages, requires_interaction = self.__process_prompt_item(self.__current_item)
             elif self.__current_item["type"] == "path":
-                self.__conversation_items = self.__conversation_config[
-                    "conversation_paths"
-                ][self.__current_item["path"]]
+                responses, chat_messages, requires_interaction = self.__process_path_item(self.__current_item)
             elif self.__current_item["type"] == "information":
-                response = self.information_extraction_chain.invoke(
-                    {
-                        "input": user_input,
-                        "chat_history": self.chat_history,
-                        "current_information_description": self.__current_item[
-                            "description"
-                        ],
-                        "current_information_format": self.__current_item["format"],
-                        "is_recursive": is_recursive,
-                    }
-                )
-                if isinstance(response, list):
-                    collected_responses.extend(response)
-                else:
-                    collected_responses.append((response, "information"))
-                    self.chat_history.append(AIMessage(content=response))
-                break
+                responses, chat_messages, requires_interaction = self.__process_information_item(self.__current_item, user_input, is_recursive)
             elif self.__current_item["type"] == "choice":
-                response = self.choice_extraction_chain.invoke(
-                    {
-                        "input": user_input,
-                        "chat_history": self.chat_history,
-                        "current_choice": self.__current_item["choice"],
-                        "current_choice_options": list(self.__current_item["options"].keys()),
-                        "is_recursive": is_recursive,
-                    }
-                )
-                if isinstance(response, list):
-                    collected_responses.extend(response)
-                else:
-                    collected_responses.append((response, "choice"))
-                    self.chat_history.append(AIMessage(content=response))
-                break
+                responses, chat_messages, requires_interaction = self.__process_choice_item(self.__current_item, user_input, is_recursive)
             elif self.__current_item["type"] == "function":
-                information_is_valid = self.__get_information_lock()
-                if not information_is_valid:
-                    continue
-            
-                module = importlib.import_module(self.__current_item["module"])
-                function = getattr(module, self.__current_item["function"])
-                response = function(self.__extracted_information, self.__softphone)
-                collected_responses.append((response, "function"))
+                responses, chat_messages, requires_interaction = self.__process_function_item(self.__current_item)
             elif self.__current_item["type"] == "function_choice":
-                information_is_valid = self.__get_information_lock()
-                if not information_is_valid:
-                    continue
-                
-                module = importlib.import_module(self.__current_item["module"])
-                function = getattr(module, self.__current_item["function"])
-                choice = function(self.__extracted_information, self.__softphone)
-                self.__conversation_items = self.__current_item["options"][choice]
+                responses, chat_messages, requires_interaction = self.__process_function_choice_item(self.__current_item)
 
+            collected_responses.extend(responses)
+            self.chat_history.extend(chat_messages)
+            if requires_interaction:
+                break
+                
             if len(self.__conversation_items) > 0:
                 # for interactive items, breakt the loop to get user input. Last item can`t be interactive.
                 if self.__current_item.get("interactive", False):
