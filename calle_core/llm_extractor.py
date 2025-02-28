@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import time
+import traceback
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.output_parsers.string import StrOutputParser
@@ -29,15 +30,10 @@ class LLMExtractor:
         conversation_config (dict): Dictionary containing the conversation items (read from the conversation config document).
         llm_provider (str, optional): The LLM provider to use. Options are "openai" and "ollama". Defaults to "openai".
         softphone (object, optional): Softphone used for passing to function calls. Defaults to None.
-
-    Raises:
-        ValueError: If an invalid LLM provider is specified.
-
-    Attributes:
-        status (ExtractionStatus): The current status of the extraction process.
-        chat_history (list): Past user and LLM messages.
-        information_extraction_chain (RunnableBranch): The langchain chain of operations for information extraction.
-        choice_extraction_chain (RunnableBranch): The langchain chain of operations for choice extraction.
+        realtime (bool, optional): Whether to use the OpenAI realtime API. Defaults to True.
+        incoming_buffer (Queue, optional): Queue for incoming audio data. Defaults to None Has to be specified when using realtime.
+        outgoing_buffer (Queue, optional): Queue for outgoing audio data. Defaults to None. Has to be specified when using realtime.
+    
     """
 
     def __init__(self, conversation_config, llm_provider="openai", softphone=None, realtime=True, incoming_buffer=None, outgoing_buffer=None):
@@ -94,10 +90,22 @@ class LLMExtractor:
         self.__current_item_callback_args = ""
         self.__current_item_in_progress = False
         
-        threading.Thread(target=self.__run_realtime_client).start()
-        threading.Thread(target=self.__send_outgoing_buffer).start()
+        if self.__realtime:
+            threading.Thread(target=self.__run_realtime_client).start()
+            threading.Thread(target=self.__send_outgoing_buffer).start()
         
     def __run_realtime_client(self):
+        """
+    Establish and manage a real-time WebSocket connection with the OpenAI API.
+    
+    Event Handlers:
+        on_open(ws): Sends session parameters to the server when the connection is opened.
+        on_message(ws, message): Processes incoming messages from the server.
+        on_error(error): Prints the error message and stack trace if an error occurs.
+
+    Returns:
+        None
+    """
         def on_open(ws):
             # set up session parameters
             event = {
@@ -114,7 +122,7 @@ class LLMExtractor:
                     },
                 }
             }
-            self.ws.send(json.dumps(event))
+            ws.send(json.dumps(event))
          
     
         def on_message(ws, message):
@@ -126,6 +134,8 @@ class LLMExtractor:
                 self.__incoming_buffer.put(audio_bytes)  
             elif server_event['type'] == "response.done":
                 # track transcribed model output
+                if len(server_event['response']['output']) <= 0 or hasattr(server_event['response']['output'][0], 'content') == False:
+                    return
                 model_response = server_event['response']['output'][0]['content'][0]['transcript']
                 self.__current_item_messages.append(AIMessage(content=model_response))
             elif server_event['type'] == "conversation.item.input_audio_transcription.completed":
@@ -136,6 +146,10 @@ class LLMExtractor:
                 # callback sent from model
                 self.__current_item_callback_args = json.loads(server_event['arguments'])
                 self.__current_item_in_progress = False
+        
+        def on_error(error):
+            print(f"An error occured in OpenAI realtime connection: {error}")
+            traceback.print_exc()
             
         api_url = "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17"
         headers = [
@@ -147,18 +161,24 @@ class LLMExtractor:
             api_url,
             header=headers,
             on_message=on_message,
-            on_error=lambda ws, error: print(f"An error occured in OpenAI realtime connection: {error}"),
+            on_error=lambda ws, error: on_error(error),
         )
         self.__realtime_connection.on_open = on_open
         self.__realtime_connection.run_forever()
     
     def __send_outgoing_buffer(self):
+        """
+        Send outgoing audio buffer encoded as base64 to the OpenAI realtime API.
+
+        Returns:
+            None
+        """
         while self.status == ExtractionStatus.IN_PROGRESS:
             if self.__realtime_connection is None:
                 time.sleep(0.2)
                 continue
         
-            audio_bytes = self.outgoing_buffer.get()
+            audio_bytes = self.__outgoing_buffer.get()
             encoded_audio = base64.b64encode(audio_bytes).decode('utf-8')            
             event = {
                 "type": "input_audio_buffer.append",
@@ -447,6 +467,9 @@ class LLMExtractor:
         else:
             return ""
 
+        if self.__realtime:
+            return
+        
         return self.__process_conversation_items(
             data["input"], is_recursive=True, aborted=True
         )
@@ -505,6 +528,12 @@ class LLMExtractor:
         return not self.__repeat_item
     
     def __wait_for_model_callback(self):
+        """
+        Wait for a functions callback from the realtime API.
+
+        Returns:
+            tuple: A tuple containing the callback arguments (dict) and the list of chat messages (list).
+        """
         self.__current_item_messages = []
         self.__current_item_callback_args = None
         self.__current_item_in_progress = True
@@ -516,10 +545,16 @@ class LLMExtractor:
         chat_messages = self.__current_item_messages
         args = self.__current_item_callback_args
         
-        return chat_messages, args
+        return args, chat_messages
         
     
     def __process_read_item(self, item):
+        """
+        Process a conversation item of type read and generate responses.
+
+        Returns:
+            tuple: A tuple containing the responses (list), chat messages (list), and a boolean indicating if interaction is required (bool).
+        """
         response_text = item["text"] + "\n"
         responses = [(response_text, "read")]
         chat_messages = [AIMessage(content=response_text)]
@@ -528,6 +563,12 @@ class LLMExtractor:
         return responses, chat_messages, requires_interaction
     
     def __process_prompt_item(self, item):
+        """
+        Process a conversation item of type prompt and generate responses.
+
+        Returns:
+            tuple: A tuple containing the responses (list), chat messages (list), and a boolean indicating if interaction is required (bool).
+        """
         if self.__realtime:
             raise NotImplementedError()
         else:
@@ -538,6 +579,12 @@ class LLMExtractor:
         return responses, chat_messages, False
     
     def __process_path_item(self, item):
+        """
+        Process a conversation item of type path and generate responses.
+
+        Returns:
+            tuple: A tuple containing the responses (list), chat messages (list), and a boolean indicating if interaction is required (bool).
+        """
         self.__conversation_items = self.__conversation_config[
                     "conversation_paths"
                 ][item["path"]]
@@ -545,6 +592,12 @@ class LLMExtractor:
         return [], [], False
 
     def __process_information_item(self, item, user_input, is_recursive):
+        """
+        Process a conversation item of type information and generate responses.
+
+        Returns:
+            tuple: A tuple containing the responses (list), chat messages (list), and a boolean indicating if interaction is required (bool).
+        """
         if self.__realtime:
             # enable VAD, define callback function
             session_update_event = {
@@ -561,7 +614,7 @@ class LLMExtractor:
                         {
                             "type": "function",
                             "name": "information_callback",
-                            "description": f"Call this function once you have sucessfully extracted the information from the user. Provide as a parameter the extracted information. The parameter should be in the following format: {item['format']}",
+                            "description": f"Call this function once you have sucessfully extracted the information from the user. Provide as a parameter the extracted information. The parameter should be in the following format: {item['format']}. If the user seems uncomfortable or doesn't want to answer, output ##ABORT## as parameter.",
                             "parameters": {
                                 "type": "object",
                                 "properties": {
@@ -605,6 +658,10 @@ class LLMExtractor:
             # extract information from callback
             # TODO: we assume model ouputs always right args. Maybe introduce a null check and handle by repeating, as in the non-realtime case
             information = callback_args["information"]
+            
+            if information == '##ABORT##':
+                self.__extraction_aborted({})
+            
             self.__information_lock.acquire()
             self.__extracted_information[item['title']] = information
             self.__repeat_item = None
@@ -636,6 +693,12 @@ class LLMExtractor:
         return responses, chat_messages, requires_interaction
     
     def __process_choice_item(self, item, user_input, is_recursive):
+        """
+        Process a conversation item of type choice and generate responses.
+
+        Returns:
+            tuple: A tuple containing the responses (list), chat messages (list), and a boolean indicating if interaction is required (bool).
+        """
         if self.__realtime:
             # enable VAD, define callback function
             session_update_event = {
@@ -652,7 +715,7 @@ class LLMExtractor:
                         {
                             "type": "function",
                             "name": "choice_callback",
-                            "description": f"Call this function once you have sucessfully extracted the selected choice, which should be only one of the following: {item["options"].keys()}",
+                            "description": f"Call this function once you have sucessfully extracted the selected choice, which should be only one of the following: {item["options"].keys()}. If the user seems uncomfortable or doesn't want to answer, output ##ABORT## as parameter.",
                             "parameters": {
                                 "type": "object",
                                 "properties": {
@@ -696,6 +759,10 @@ class LLMExtractor:
             # extract choice and update conversation path accordingly
             # TODO: we assume model ouputs always right args. Maybe introduce a null check and handle by repeating, as in the non-realtime case
             selected_choice = callback_args["choice"]
+            
+            if selected_choice == '##ABORT##':
+                self.__extraction_aborted({})
+                
             self.__conversation_items = item["options"][selected_choice]
             self.__current_item = self.__conversation_items.pop(0)
     
@@ -723,6 +790,12 @@ class LLMExtractor:
         return responses, chat_messages, requires_interaction
     
     def __process_function_item(self, item):
+        """
+        Process a conversation item of type function and generate responses.
+
+        Returns:
+            tuple: A tuple containing the responses (list), chat messages (list), and a boolean indicating if interaction is required (bool).
+        """
         information_is_valid = self.__get_information_lock()
         if not information_is_valid:
             return [], [], False
@@ -734,9 +807,17 @@ class LLMExtractor:
             responses = [(response_text, "function")]
             chat_messages = [AIMessage(content=response_text)]
             
-        return responses, chat_messages, False
+        requires_interaction = self.__realtime
+            
+        return responses, chat_messages, requires_interaction
     
     def __process_function_choice_item(self, item):
+        """
+        Process a conversation item of type function choice and generate responses.
+
+        Returns:
+            tuple: A tuple containing the responses (list), chat messages (list), and a boolean indicating if interaction is required (bool).
+        """
         information_is_valid = self.__get_information_lock()
         if not information_is_valid:
             return [], [], False
@@ -762,7 +843,7 @@ class LLMExtractor:
         Returns:
             list: A list of collected responses from processing the conversation items. Each response is a tuple (message, type), where 'message' is the actual response and 'type' is the type of the conversation item that produced this response.
         """
-        if not is_recursive:
+        if not is_recursive and not self.__realtime:
             self.chat_history.append(HumanMessage(content=user_input))
 
         collected_responses = []
@@ -789,12 +870,13 @@ class LLMExtractor:
 
             collected_responses.extend(responses)
             self.chat_history.extend(chat_messages)
-            if requires_interaction:
+            
+            if requires_interaction and not self.__realtime:
                 break
                 
             if len(self.__conversation_items) > 0:
                 # for interactive items, breakt the loop to get user input. Last item can`t be interactive.
-                if self.__current_item.get("interactive", False):
+                if (requires_interaction and self.__realtime) or self.__current_item.get("interactive", False):
                     self.__current_item = self.__conversation_items.pop(0)
                     break
                 else:
