@@ -1,7 +1,10 @@
+import base64
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
+import queue
 import threading
 import time
 import wave
@@ -126,6 +129,10 @@ class Softphone:
         self.__media_player_1 = None
         self.__media_player_2 = None
         self.__media_recorder = None
+        
+        self.__external_incoming_buffer = queue.Queue()
+        self.__external_outgoing_buffer = queue.Queue()
+        self.__audio_output_lock = threading.Lock() # determines, which thread can use softphone for output
 
         # Initialize OpenAI
         self.__openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
@@ -169,6 +176,93 @@ class Softphone:
                     print(
                         f"An error occurred while trying to delete the file {artifact}: {e}"
                     )
+                    
+    def __external_incoming_buffer_loop(self):
+        """
+        Playback audio incoming from external source (eg. OpenAI realtime API), stored in external incoming buffer.
+        Assumes chunks of raw PCM audio with sample rate 24000, 16 bit, mono.
+
+        Returns:
+            None
+        """
+        
+        self.__group.pjsua_endpoint.libRegisterThread("external_incoming_buffer_loop")
+        
+        while self.has_picked_up_call():         
+                            
+            # play back incoming audio buffer
+            incoming_audio_chunks = []
+            while not self.__external_incoming_buffer.empty():
+                audio_chunk = self.__external_incoming_buffer.get()
+                incoming_audio_chunks.append(audio_chunk)
+
+            if incoming_audio_chunks:
+                self.__audio_output_lock.acquire()
+                
+                combined_incoming_audio = b''.join(incoming_audio_chunks)
+                incoming_audio_segment = AudioSegment.from_file(io.BytesIO(combined_incoming_audio), format="raw", frame_rate=24000, channels=1, sample_width=2)
+                incoming_audio_path = str(HERE / f"../artifacts/{self.__id}_openai_incoming.wav")
+                incoming_audio_segment.export(incoming_audio_path, format="wav")
+                
+                
+                call_info = self.active_call.getInfo()
+                for i in range(len(call_info.media)):
+                    if (
+                        call_info.media[i].type == pj.PJMEDIA_TYPE_AUDIO
+                        and call_info.media[i].status == pj.PJSUA_CALL_MEDIA_ACTIVE
+                    ):
+                        call_media = self.active_call.getAudioMedia(i)
+                        self.__media_player_1 = pj.AudioMediaPlayer()
+                        self.__media_player_1.createPlayer(incoming_audio_path, pj.PJMEDIA_FILE_NO_LOOP)
+                        self.__media_player_1.startTransmit(call_media)
+                        
+                        time.sleep(incoming_audio_segment.duration_seconds)
+                        
+                        self.__media_player_1.stopTransmit(call_media)
+                self.__audio_output_lock.release()
+            else:
+                time.sleep(0.2)
+    
+    def __external_outgoing_buffer_loop(self):
+        """
+        Record audio to be sent to external source (eg. OpenAI realtime API) and store it in external outgoing buffer.
+        Assumes chunks of raw PCM audio with sample rate 24000, 16 bit, mono.
+        
+        Returns:
+            None
+        """
+        
+        self.__group.pjsua_endpoint.libRegisterThread("external_incoming_buffer_loop")
+
+        while self.has_picked_up_call():
+            self.__record_incoming_audio()
+            
+            if not self.has_picked_up_call():
+                return
+            
+            outgoing_audio_segment = AudioSegment.from_file(str(HERE / f"../artifacts/{self.__id}_incoming.wav"), format="wav")
+            outgoing_audio_segment = outgoing_audio_segment.set_frame_rate(24000).set_channels(1).set_sample_width(2)
+
+            outgoing_audio_buffer = io.BytesIO()
+            outgoing_audio_segment.export(outgoing_audio_buffer, format="wav")
+            outgoing_audio_buffer.seek(0)
+            
+            self.__external_outgoing_buffer.put(outgoing_audio_buffer.read())
+            
+    def handle_external_buffers(self):
+        """
+        Start handling the external incoming and outgoing audio buffers in separate threads.
+        
+        Returns:
+            (queue.Queue, queue.Queue): The external incoming and outgoing audio buffers.
+        """
+        incoming_buffer_thread = threading.Thread(target=self.__external_incoming_buffer_loop)
+        outgoing_buffer_thread = threading.Thread(target=self.__external_outgoing_buffer_loop)
+
+        incoming_buffer_thread.start()
+        outgoing_buffer_thread.start()
+        
+        return self.__external_incoming_buffer, self.__external_outgoing_buffer
 
     def call(self, phone_number):
         """
@@ -432,6 +526,9 @@ class Softphone:
             print("Can't say: Call is in forwarding session.")
             return
         
+        # wait for incoming buffer to finish playing
+        self.__audio_output_lock.acquire()
+        
         # Setup audio media
         call_info = self.active_call.getInfo()
         for i in range(len(call_info.media)):
@@ -458,6 +555,7 @@ class Softphone:
                     time.sleep(cached_audio.duration_seconds)
                     
                     self.__media_player_1.stopTransmit(call_media)
+                    self.__audio_output_lock.release()
                     return
                 
                 # -- Recieve TTS audio from OpenAI and stream it using double buffering --
@@ -594,6 +692,8 @@ class Softphone:
                             combined_audio.export(str(cached_audio_path), format="wav")
                             
                         time.sleep(delay)
+                        
+                        self.__audio_output_lock.release()
                         # play residue audio from last buffer
                         # try:
                         #     if buffer_switch:
@@ -621,6 +721,7 @@ class Softphone:
                         e,
                     )
                     traceback.print_exc()
+                    self.__audio_output_lock.release()
                 return
         print("No available audio media")
 

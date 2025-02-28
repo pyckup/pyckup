@@ -18,7 +18,7 @@ class call_e:
     db = None
 
     def __init__(
-        self, sip_credentials_path, db_path=None, log_dir=None
+        self, sip_credentials_path, db_path=None, log_dir=None, realtime=True
     ):
         """
         Create an instance of the call_e class.
@@ -27,10 +27,12 @@ class call_e:
             sip_credentials_path (str): The file path to the SIP credentials.
             db_path (str, optional): The file path to the database (will be created if it doesn't exist). If None, database functions can't be used. Defaults to None.    
             log_dir (str, optional): The directory where logs will be saved. If None, loggin is disabled. Defaults to None.
+            realtime (bool, optional): Whether to use the OpenAI realtime API. Defaults to True.
             """
         self.__sip_credentials_path = sip_credentials_path
         self.__setup_db(db_path)
         self.__log_dir = log_dir
+        self.__realtime = realtime
 
     def __del__(self):
         if self.db is not None:
@@ -220,7 +222,7 @@ class call_e:
 
         return {"num_attempts": status_data[2], "status": status_data[3]}
     
-    def __call_core_routine(self, softphone, conversation_config, is_outgoing, enable_logging=True, contact_id=None):
+    def __call_core_routine(self, softphone, conversation_config, is_outgoing, enable_logging=True, contact_id=None, conversation_title=None):
         """
         Core routine for handling a call.
 
@@ -230,6 +232,7 @@ class call_e:
             is_outgoing (bool): Flag indicating if the call is outgoing.
             enable_logging (bool, optional): Flag to enable or disable logging. Defaults to True.
             contact_id (str, optional): The contact ID for the call. Only set if call is performed by call_contact(s). Defaults to None.
+            conversation_title (str, optional): The title of the conversation. Only set if call is performed by call_contact(s). Defaults to None.
 
         Returns:
             None
@@ -241,31 +244,38 @@ class call_e:
         if enable_logging:
             log_path = setup_log(self.__log_dir, phone_number)
         
-        extractor = LLMExtractor(conversation_config, softphone=softphone)
-        extractor_responses = extractor.run_extraction_step("")
-        if enable_logging:
-            for response in extractor_responses:
-                log_message(log_path, response[0], role="Call-E")
-        for response in extractor_responses:
-            cache_audio = True if response[1] == "read" else False
-            softphone.say(response[0], cache_audio=cache_audio)
-
-        while (
-            extractor.get_status() == ExtractionStatus.IN_PROGRESS
-            and softphone.has_picked_up_call()
-        ):
-            time.sleep(0.5)
-            user_input = softphone.listen()
+        
+        if self.__realtime:
+            #REALTIME CASE
+            num_logged_messages = 0
+            incoming_buffer, outgoing_buffer = softphone.handle_external_buffers()
+            extractor = LLMExtractor(conversation_config, softphone=softphone, realtime=True, incoming_buffer=incoming_buffer, outgoing_buffer=outgoing_buffer)
             
-            # user input is ##INTERRUPTED## if listening couldn`t be performed. Could be due to call interruption or holding the call for too long.
-            if user_input == "##INTERRUPTED##":
-                softphone.hangup()
-                print("Call interrupted during listening.")
+            while (
+                extractor.get_status() == ExtractionStatus.IN_PROGRESS
+                and softphone.has_picked_up_call()
+            ):
+                extractor_responses = extractor.run_extraction_step("")  
+                
+                # log new messages
+                if enable_logging:
+                    chat_history = extractor.chat_history
+                    for message in chat_history[num_logged_messages:]:
+                        if message.type == "ai":
+                            log_message(log_path, message.content, role="Call-E")
+                        elif message.type == "human":
+                            log_message(log_path, message.content, role="User")
+                    num_logged_messages += len(chat_history[num_logged_messages:])
                     
-            softphone.play_audio(str(HERE / "../resources/processing.wav"))
-            if enable_logging:
-                log_message(log_path, user_input, role="User")
-            extractor_responses = extractor.run_extraction_step(user_input)
+                # read out responses
+                for response in extractor_responses:
+                    if response[1] == "read" or response[1] == "function":
+                        softphone.say(response[0], cache_audio=True)
+             
+        else:
+            # NOT-REALTIME CASE
+            extractor = LLMExtractor(conversation_config, softphone=softphone, realtime=False)
+            extractor_responses = extractor.run_extraction_step("")
             if enable_logging:
                 for response in extractor_responses:
                     log_message(log_path, response[0], role="Call-E")
@@ -273,44 +283,67 @@ class call_e:
                 cache_audio = True if response[1] == "read" else False
                 softphone.say(response[0], cache_audio=cache_audio)
 
-        if extractor.get_status() != ExtractionStatus.COMPLETED:
-            print("Extraction aborted")
+            while (
+                extractor.get_status() == ExtractionStatus.IN_PROGRESS
+                and softphone.has_picked_up_call()
+            ):
+                time.sleep(0.5)
+                user_input = softphone.listen()
+                
+                # user input is ##INTERRUPTED## if listening couldn`t be performed. Could be due to call interruption or holding the call for too long.
+                if user_input == "##INTERRUPTED##":
+                    softphone.hangup()
+                    print("Call interrupted during listening.")
+                        
+                softphone.play_audio(str(HERE / "../resources/processing.wav"))
+                if enable_logging:
+                    log_message(log_path, user_input, role="User")
+                extractor_responses = extractor.run_extraction_step(user_input)
+                if enable_logging:
+                    for response in extractor_responses:
+                        log_message(log_path, response[0], role="Call-E")
+                for response in extractor_responses:
+                    cache_audio = True if response[1] == "read" else False
+                    softphone.say(response[0], cache_audio=cache_audio)
 
-            if do_db_updates:
-                cursor = self.db.cursor()
-                cursor.execute(
-                    f"""
-                UPDATE {conversation_title}_status SET status = "ABORTED" WHERE contact_id = ?
-                """,
-                    (contact_id,),
-                )
-                self.db.commit()
-        else:
-            # successful extraction, save results in db
-            print("Extraction completed")
+            if extractor.get_status() != ExtractionStatus.COMPLETED:
+                print("Extraction aborted")
 
-            if do_db_updates:
-                cursor = self.db.cursor()
-                cursor.execute(
-                    f"""
-                UPDATE {conversation_title}_status SET status = "COMPLETED" WHERE contact_id = ?
-                """,
-                    (contact_id,),
-                )
+                if do_db_updates:
+                    cursor = self.db.cursor()
+                    cursor.execute(
+                        f"""
+                    UPDATE {conversation_title}_status SET status = "ABORTED" WHERE contact_id = ?
+                    """,
+                        (contact_id,),
+                    )
+                    self.db.commit()
+            else:
+                # successful extraction, save results in db
+                print("Extraction completed")
 
-                information = extractor.get_information()
-                cursor.execute(
-                    f"""
-                    INSERT OR REPLACE INTO {conversation_title} (
-                        contact_id, {', '.join([key.lower() for key in information.keys()])}
-                        )
-                    VALUES (
-                        ?, {', '.join(['?']*len(information))}
-                        )
-                """,
-                    [contact_id] + list(information.values()),
-                )
-                self.db.commit()
+                if do_db_updates:
+                    cursor = self.db.cursor()
+                    cursor.execute(
+                        f"""
+                    UPDATE {conversation_title}_status SET status = "COMPLETED" WHERE contact_id = ?
+                    """,
+                        (contact_id,),
+                    )
+
+                    information = extractor.get_information()
+                    cursor.execute(
+                        f"""
+                        INSERT OR REPLACE INTO {conversation_title} (
+                            contact_id, {', '.join([key.lower() for key in information.keys()])}
+                            )
+                        VALUES (
+                            ?, {', '.join(['?']*len(information))}
+                            )
+                    """,
+                        [contact_id] + list(information.values()),
+                    )
+                    self.db.commit()
 
             
 
@@ -377,7 +410,7 @@ class call_e:
 
         print("Call picked up. Setting up extractor.")
         
-        self.__call_core_routine(sf, conversation_config, is_outgoing=True, enable_logging=enable_logging, contact_id=contact_id)
+        self.__call_core_routine(sf, conversation_config, is_outgoing=True, enable_logging=enable_logging, contact_id=contact_id, conversation_title=conversation_title)
 
         
     def call_number(self, phone_number, conversation_config_path, enable_logging=True):
