@@ -199,6 +199,10 @@ class Softphone:
             if incoming_audio_chunks:
                 self.__audio_output_lock.acquire()
                 
+                if not self.has_picked_up_call():
+                    self.__audio_output_lock.release()
+                    return
+                
                 combined_incoming_audio = b''.join(incoming_audio_chunks)
                 incoming_audio_segment = AudioSegment.from_file(io.BytesIO(combined_incoming_audio), format="raw", frame_rate=24000, channels=1, sample_width=2)
                 incoming_audio_path = str(HERE / f"../artifacts/{self.__id}_openai_incoming.wav")
@@ -212,13 +216,16 @@ class Softphone:
                         and call_info.media[i].status == pj.PJSUA_CALL_MEDIA_ACTIVE
                     ):
                         call_media = self.active_call.getAudioMedia(i)
-                        self.__media_player_1 = pj.AudioMediaPlayer()
-                        self.__media_player_1.createPlayer(incoming_audio_path, pj.PJMEDIA_FILE_NO_LOOP)
-                        self.__media_player_1.startTransmit(call_media)
+                        # use media player 2 for realtime conversation audio
+                        self.__media_player_2 = pj.AudioMediaPlayer()
+                        self.__media_player_2.createPlayer(incoming_audio_path, pj.PJMEDIA_FILE_NO_LOOP)
+                        self.__media_player_2.startTransmit(call_media)
                         
                         time.sleep(incoming_audio_segment.duration_seconds)
                         
-                        self.__media_player_1.stopTransmit(call_media)
+                        if self.__media_player_2:
+                            self.__media_player_2.stopTransmit(call_media)
+                            del self.__media_player_2
                 self.__audio_output_lock.release()
             else:
                 time.sleep(0.2)
@@ -232,17 +239,32 @@ class Softphone:
             None
         """
         
-        self.__group.pjsua_endpoint.libRegisterThread("external_incoming_buffer_loop")
+        self.__group.pjsua_endpoint.libRegisterThread("external_outgoing_buffer_loop")
 
         while self.has_picked_up_call():
-            self.__record_incoming_audio()
+            self.__skip_silence()
             
             if not self.has_picked_up_call():
                 return
             
-            outgoing_audio_segment = AudioSegment.from_file(str(HERE / f"../artifacts/{self.__id}_incoming.wav"), format="wav")
+            # interrupt audio output, since user started speaking
+            call_info = self.active_call.getInfo()
+            for i in range(len(call_info.media)):
+                    if (
+                        call_info.media[i].type == pj.PJMEDIA_TYPE_AUDIO
+                        and call_info.media[i].status == pj.PJSUA_CALL_MEDIA_ACTIVE
+                    ):
+                        call_media = self.active_call.getAudioMedia(i)  
+                        if self.__media_player_2:
+                            self.__media_player_2.stopTransmit(call_media)
+                            del self.__media_player_2
+            
+            _, outgoing_audio_segment = self.__record_while_not_silent()
+            
+            if not self.has_picked_up_call():
+                return
+            
             outgoing_audio_segment = outgoing_audio_segment.set_frame_rate(24000).set_channels(1).set_sample_width(2)
-
             outgoing_audio_buffer = io.BytesIO()
             outgoing_audio_segment.export(outgoing_audio_buffer, format="wav")
             outgoing_audio_buffer.seek(0)
@@ -256,11 +278,8 @@ class Softphone:
         Returns:
             (queue.Queue, queue.Queue): The external incoming and outgoing audio buffers.
         """
-        incoming_buffer_thread = threading.Thread(target=self.__external_incoming_buffer_loop)
-        outgoing_buffer_thread = threading.Thread(target=self.__external_outgoing_buffer_loop)
-
-        incoming_buffer_thread.start()
-        outgoing_buffer_thread.start()
+        threading.Thread(target=self.__external_incoming_buffer_loop).start()
+        threading.Thread(target=self.__external_outgoing_buffer_loop).start()
         
         return self.__external_incoming_buffer, self.__external_outgoing_buffer
 
@@ -769,49 +788,22 @@ class Softphone:
         Returns:
             str: The transcribed text from the recorded audio.
         """
-        # skip silence
-        if not self.__record_incoming_audio(self.__config["silence_sample_interval"]):
+        if not self.__skip_silence():
             return "##INTERRUPTED##"
-
-        last_segment = AudioSegment.from_wav(
-            str(HERE / f"../artifacts/{self.__id}_incoming.wav")
-        )
-        while last_segment.dBFS < self.__config["silence_threshold"]:
-
-            if not self.active_call or self.__paired_call:
-                return ""
-
-            if not self.__record_incoming_audio(
-                self.__config["silence_sample_interval"]
-            ):
-                return "##INTERRUPTED##"
-            last_segment = AudioSegment.from_wav(
-                str(HERE / f"../artifacts/{self.__id}_incoming.wav")
-            )
-
-        # record audio while over silence threshold
-        combined_segments = last_segment
-        active_threshold = self.__config["silence_threshold"]
         
-        while last_segment.dBFS > active_threshold:
-            
-            # adapt thrshold to current noise level
-            active_threshold = last_segment.dBFS - 5
+        if not self.active_call or self.__paired_call:
+            return ""
 
-            if not self.active_call or self.__paired_call:
+        recording_successful, recorded_audio = self.__record_while_not_silent()
+        
+        if not recording_successful:
+            return "##INTERRUPTED##"
+        
+        if not self.active_call or self.__paired_call:
                 return ""
-
-            if not self.__record_incoming_audio(
-                self.__config["speaking_sample_interval"]
-            ):
-                return "##INTERRUPTED##"
-            last_segment = AudioSegment.from_wav(
-                str(HERE / f"../artifacts/{self.__id}_incoming.wav")
-            )
-            combined_segments += last_segment
 
         # output combined audio to file
-        combined_segments.export(
+        recorded_audio.export(
             str(HERE / f"../artifacts/{self.__id}_incoming_combined.wav"), format="wav"
         )
 
@@ -875,6 +867,69 @@ class Softphone:
             continue
         
         return False
+    
+    def __skip_silence(self):
+        """
+        Wait until incoming audio stream is no longer silent.
+
+        Returns:
+            bool: True if recording could be performed successfully, False otherwise.
+        """
+        if not self.__record_incoming_audio(self.__config["silence_sample_interval"]):
+            return False
+
+        last_segment = AudioSegment.from_wav(
+            str(HERE / f"../artifacts/{self.__id}_incoming.wav")
+        )
+        while last_segment.dBFS < self.__config["silence_threshold"]:
+
+            if not self.active_call or self.__paired_call:
+                return ""
+
+            if not self.__record_incoming_audio(
+                self.__config["silence_sample_interval"]
+            ):
+                return False
+            last_segment = AudioSegment.from_wav(
+                str(HERE / f"../artifacts/{self.__id}_incoming.wav")
+            )
+        
+        return True
+            
+    def __record_while_not_silent(self):
+        """
+        Record incoming audio while over silence threshold.
+
+        Returns:
+            tuple: A tuple containing a boolean indicating if the recording was successful (bool) and the combined audio segments (AudioSegment).
+        """
+        
+        self.__record_incoming_audio(self.__config["silence_sample_interval"])
+        last_segment = AudioSegment.from_wav(
+            str(HERE / f"../artifacts/{self.__id}_incoming.wav")
+        )
+        combined_segments = last_segment
+        
+        active_threshold = self.__config["silence_threshold"]
+        
+        while last_segment.dBFS > active_threshold:
+            
+            # adapt thrshold to current noise level
+            active_threshold = last_segment.dBFS - 5
+
+            if not self.active_call or self.__paired_call:
+                return True, ""
+
+            if not self.__record_incoming_audio(
+                self.__config["speaking_sample_interval"]
+            ):
+                return False, None
+            last_segment = AudioSegment.from_wav(
+                str(HERE / f"../artifacts/{self.__id}_incoming.wav")
+            )
+            combined_segments += last_segment
+        
+        return True, combined_segments
 
 
 class SoftphoneGroup:
