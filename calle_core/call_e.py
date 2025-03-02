@@ -331,7 +331,7 @@ class call_e:
                         (contact_id,),
                     )
 
-                    information = extractor.get_information()
+                    information = extractor.get_conversation_state()
                     cursor.execute(
                         f"""
                         INSERT OR REPLACE INTO {conversation_title} (

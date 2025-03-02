@@ -51,8 +51,8 @@ class LLMExtractor:
 
         self.__conversation_config = copy.deepcopy(conversation_config)
         self.__load_conversation_path("entry")
-        self.__extracted_information = {}
-        self.__information_lock = threading.Lock()
+        self.__conversation_state = {} #includes extracted information and can be used to store data conversation-wide
+        self.__conversation_state_lock = threading.Lock() # acquire this before accessing the conversation state
         self.__repeat_item = None # if information filtering failed, the item is repeated
 
         self.__softphone = softphone
@@ -396,16 +396,16 @@ class LLMExtractor:
         Returns:
             None
         """
-        self.__information_lock.acquire()
+        self.__conversation_state_lock.acquire()
         filtered_info = self.__filter_information(data)
         if filtered_info:
-            self.__extracted_information[information_item['title']] = filtered_info
+            self.__conversation_state[information_item['title']] = filtered_info
             self.__repeat_item = None
         else:
             # information couldn't be extracted, so repeat the item at next possibility
             self.__repeat_item = information_item
             
-        self.__information_lock.release()
+        self.__conversation_state_lock.release()
 
     def __information_extraction_successful(self, data):
         """
@@ -516,15 +516,15 @@ class LLMExtractor:
         self.__current_item = repeat_prompt_item
         self.__repeat_item = None
     
-    def __get_information_lock(self):
+    def __get_conversation_state_lock(self):
         """
-        Acquire and release the information lock.
+        Acquire and release the conversation state lock.
 
         Returns:
-            bool: True if state of information dict is valid, i.e. no repitition needs to be performed, False otherwise.
+            bool: True if state dict is valid, i.e. no repitition needs to be performed, False otherwise.
         """
-        self.__information_lock.acquire()
-        self.__information_lock.release()
+        self.__conversation_state_lock.acquire()
+        self.__conversation_state_lock.release()
         return not self.__repeat_item
     
     def __wait_for_model_callback(self):
@@ -662,10 +662,10 @@ class LLMExtractor:
             if information == '##ABORT##':
                 self.__extraction_aborted({})
             
-            self.__information_lock.acquire()
-            self.__extracted_information[item['title']] = information
+            self.__conversation_state_lock.acquire()
+            self.__conversation_state[item['title']] = information
             self.__repeat_item = None
-            self.__information_lock.release()
+            self.__conversation_state_lock.release()
     
             responses = [("Realtime Conversation", "information")]
             requires_interaction = False
@@ -796,13 +796,13 @@ class LLMExtractor:
         Returns:
             tuple: A tuple containing the responses (list), chat messages (list), and a boolean indicating if interaction is required (bool).
         """
-        information_is_valid = self.__get_information_lock()
+        information_is_valid = self.__get_conversation_state_lock()
         if not information_is_valid:
             return [], [], False
     
         module = importlib.import_module(item["module"])
         function = getattr(module, item["function"])
-        response_text = function(self.__extracted_information, self.__softphone)
+        response_text = function(self.__conversation_state, self.__softphone)
         if response_text:
             responses = [(response_text, "function")]
             chat_messages = [AIMessage(content=response_text)]
@@ -818,13 +818,13 @@ class LLMExtractor:
         Returns:
             tuple: A tuple containing the responses (list), chat messages (list), and a boolean indicating if interaction is required (bool).
         """
-        information_is_valid = self.__get_information_lock()
+        information_is_valid = self.__get_conversation_state_lock()
         if not information_is_valid:
             return [], [], False
                 
         module = importlib.import_module(item["module"])
         function = getattr(module, item["function"])
-        choice = function(self.__extracted_information, self.__softphone)
+        choice = function(self.__conversation_state, self.__softphone)
         self.__conversation_items = item["options"][choice]
             
         return [], [], False
@@ -902,16 +902,16 @@ class LLMExtractor:
             user_input, is_recursive=False, aborted=False
         )
 
-    def get_information(self):
+    def get_conversation_state(self):
         """
         Thread-safely etrieve the information extracted during the conversation so far.
 
         Returns:
             dict: The dictionary containing the extracted information.
         """
-        self.__information_lock.acquire()
-        self.__information_lock.release()
-        return self.__extracted_information
+        self.__conversation_state_lock.acquire()
+        self.__conversation_state_lock.release()
+        return self.__conversation_state
 
     def get_status(self):
         return self.status
