@@ -1,6 +1,10 @@
+import base64
+import hashlib
+import io
 import json
 import os
 from pathlib import Path
+import queue
 import threading
 import time
 import wave
@@ -125,15 +129,32 @@ class Softphone:
         self.__media_player_1 = None
         self.__media_player_2 = None
         self.__media_recorder = None
+        
+        self.__external_incoming_buffer = queue.Queue()
+        self.__external_outgoing_buffer = queue.Queue()
+        self.__audio_output_lock = threading.Lock() # determines, which thread can use softphone for output
 
         # Initialize OpenAI
         self.__openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+        
+        # Ensure cache directory exists
+        if not os.path.exists(HERE / "../cache"):
+            os.makedirs(HERE / "../cache")
 
     def __del__(self):
         self.__media_player_1 = None
         self.__media_player_2 = None
         self.__media_recorder = None
         self.__group.remove_phone(self)
+        
+    def get_id(self):
+        """
+        Get the unique ID of the softphone instance.
+        
+        Returns:
+            str: The unique ID of the softphone instance.
+        """
+        return self.__id
 
     def __remove_artifacts(self):
         """
@@ -155,6 +176,93 @@ class Softphone:
                     print(
                         f"An error occurred while trying to delete the file {artifact}: {e}"
                     )
+                    
+    def __external_incoming_buffer_loop(self):
+        """
+        Playback audio incoming from external source (eg. OpenAI realtime API), stored in external incoming buffer.
+        Assumes chunks of raw PCM audio with sample rate 24000, 16 bit, mono.
+
+        Returns:
+            None
+        """
+        
+        self.__group.pjsua_endpoint.libRegisterThread("external_incoming_buffer_loop")
+        
+        while self.has_picked_up_call():         
+                            
+            # play back incoming audio buffer
+            incoming_audio_chunks = []
+            while not self.__external_incoming_buffer.empty():
+                audio_chunk = self.__external_incoming_buffer.get()
+                incoming_audio_chunks.append(audio_chunk)
+
+            if incoming_audio_chunks:
+                self.__audio_output_lock.acquire()
+                
+                combined_incoming_audio = b''.join(incoming_audio_chunks)
+                incoming_audio_segment = AudioSegment.from_file(io.BytesIO(combined_incoming_audio), format="raw", frame_rate=24000, channels=1, sample_width=2)
+                incoming_audio_path = str(HERE / f"../artifacts/{self.__id}_openai_incoming.wav")
+                incoming_audio_segment.export(incoming_audio_path, format="wav")
+                
+                
+                call_info = self.active_call.getInfo()
+                for i in range(len(call_info.media)):
+                    if (
+                        call_info.media[i].type == pj.PJMEDIA_TYPE_AUDIO
+                        and call_info.media[i].status == pj.PJSUA_CALL_MEDIA_ACTIVE
+                    ):
+                        call_media = self.active_call.getAudioMedia(i)
+                        self.__media_player_1 = pj.AudioMediaPlayer()
+                        self.__media_player_1.createPlayer(incoming_audio_path, pj.PJMEDIA_FILE_NO_LOOP)
+                        self.__media_player_1.startTransmit(call_media)
+                        
+                        time.sleep(incoming_audio_segment.duration_seconds)
+                        
+                        self.__media_player_1.stopTransmit(call_media)
+                self.__audio_output_lock.release()
+            else:
+                time.sleep(0.2)
+    
+    def __external_outgoing_buffer_loop(self):
+        """
+        Record audio to be sent to external source (eg. OpenAI realtime API) and store it in external outgoing buffer.
+        Assumes chunks of raw PCM audio with sample rate 24000, 16 bit, mono.
+        
+        Returns:
+            None
+        """
+        
+        self.__group.pjsua_endpoint.libRegisterThread("external_incoming_buffer_loop")
+
+        while self.has_picked_up_call():
+            self.__record_incoming_audio()
+            
+            if not self.has_picked_up_call():
+                return
+            
+            outgoing_audio_segment = AudioSegment.from_file(str(HERE / f"../artifacts/{self.__id}_incoming.wav"), format="wav")
+            outgoing_audio_segment = outgoing_audio_segment.set_frame_rate(24000).set_channels(1).set_sample_width(2)
+
+            outgoing_audio_buffer = io.BytesIO()
+            outgoing_audio_segment.export(outgoing_audio_buffer, format="wav")
+            outgoing_audio_buffer.seek(0)
+            
+            self.__external_outgoing_buffer.put(outgoing_audio_buffer.read())
+            
+    def handle_external_buffers(self):
+        """
+        Start handling the external incoming and outgoing audio buffers in separate threads.
+        
+        Returns:
+            (queue.Queue, queue.Queue): The external incoming and outgoing audio buffers.
+        """
+        incoming_buffer_thread = threading.Thread(target=self.__external_incoming_buffer_loop)
+        outgoing_buffer_thread = threading.Thread(target=self.__external_outgoing_buffer_loop)
+
+        incoming_buffer_thread.start()
+        outgoing_buffer_thread.start()
+        
+        return self.__external_incoming_buffer, self.__external_outgoing_buffer
 
     def call(self, phone_number):
         """
@@ -299,6 +407,20 @@ class Softphone:
             bool: True if the paired call has been picked up, otherwise False.
         """
         return self.__has_picked_up_call("paired")
+    
+    def get_called_phone_number(self):
+        """
+        Get the phone number of the active call.
+
+        Returns:
+            str: The phone number of the active call.
+        """
+        if not self.active_call:
+            print("Can't get called phone number: No active call.")
+            return None
+        
+        return self.active_call.getInfo().remoteUri.split("@")[0].split(":")[1]
+
 
     def __wait_for_stop_calling(self, call_type="active", timeout=None):
         """
@@ -372,8 +494,22 @@ class Softphone:
             self.active_call = None
 
         self.__remove_artifacts()
+        
+    def __get_message_hash(self, message):
+        """
+        Calculate the hash of a given string message using SHA-256.
 
-    def say(self, message):
+        Args:
+            message (str): The input string to hash.
+
+        Returns:
+            str: The hexadecimal representation of the hash.
+        """
+        sha256_generator = hashlib.sha256()
+        sha256_generator.update(message.encode('utf-8'))
+        return sha256_generator.hexdigest()
+
+    def say(self, message, cache_audio=False):
         """
         Read out a message as audio to the active call.
 
@@ -389,7 +525,11 @@ class Softphone:
         if self.__paired_call:
             print("Can't say: Call is in forwarding session.")
             return
-
+        
+        # wait for incoming buffer to finish playing
+        self.__audio_output_lock.acquire()
+        
+        # Setup audio media
         call_info = self.active_call.getInfo()
         for i in range(len(call_info.media)):
             if (
@@ -397,7 +537,27 @@ class Softphone:
                 and call_info.media[i].status == pj.PJSUA_CALL_MEDIA_ACTIVE
             ):
                 call_media = self.active_call.getAudioMedia(i)
+                
+                # -- Scan for cached audio file --
+                message_hash = self.__get_message_hash(message)
+                cached_audio_path = os.path.join(HERE / "../cache", f"{message_hash}.wav")
+                if os.path.isfile(cached_audio_path):
+                    if self.__media_player_1:
+                        self.__media_player_1.stopTransmit(call_media)
+                    if self.__media_player_2:
+                        self.__media_player_2.stopTransmit(call_media)
 
+                    cached_audio = AudioSegment.from_wav(str(cached_audio_path))
+                    self.__media_player_1 = pj.AudioMediaPlayer()
+                    self.__media_player_1.createPlayer(str(cached_audio_path), pj.PJMEDIA_FILE_NO_LOOP)
+                    self.__media_player_1.startTransmit(call_media)
+                    
+                    time.sleep(cached_audio.duration_seconds)
+                    
+                    self.__media_player_1.stopTransmit(call_media)
+                    self.__audio_output_lock.release()
+                    return
+                
                 # -- Recieve TTS audio from OpenAI and stream it using double buffering --
                 # Setup buffer files
                 try:
@@ -426,6 +586,8 @@ class Softphone:
                         * self.__config["tts_sample_width"]
                         * self.__config["tts_channels"]
                     )  # length of each chunk in seconds
+                    
+                    combined_audio = AudioSegment.empty()
 
                     with self.__openai_client.audio.speech.with_streaming_response.create(
                         model="tts-1",
@@ -440,6 +602,7 @@ class Softphone:
                             if chunk and len(chunk) >= 512:
                                 if buffer_switch:
                                     buffer_switch = False
+                                    # play audio from buffer 0
                                     if self.__media_player_2:
                                         self.__media_player_2.stopTransmit(call_media)
                                     self.__media_player_1 = pj.AudioMediaPlayer()
@@ -451,7 +614,17 @@ class Softphone:
                                         pj.PJMEDIA_FILE_NO_LOOP,
                                     )
                                     self.__media_player_1.startTransmit(call_media)
-
+                                    
+                                    # append buffer audio to combined audio
+                                    buffered_audio = AudioSegment.from_wav(
+                                        str(
+                                            HERE
+                                            / f"../artifacts/{self.__id}_outgoing_buffer_0.wav"
+                                        )
+                                    )
+                                    combined_audio += buffered_audio
+                                         
+                                    # write audio to buffer 1
                                     with wave.open(
                                         str(
                                             HERE
@@ -472,6 +645,7 @@ class Softphone:
                                         time.sleep(delay)
                                 else:
                                     buffer_switch = True
+                                    # play audio from buffer 1
                                     if self.__media_player_1:
                                         self.__media_player_1.stopTransmit(call_media)
                                     self.__media_player_2 = pj.AudioMediaPlayer()
@@ -483,6 +657,17 @@ class Softphone:
                                         pj.PJMEDIA_FILE_NO_LOOP,
                                     )
                                     self.__media_player_2.startTransmit(call_media)
+                                    
+                                    # append buffer audio to combined audio
+                                    buffered_audio = AudioSegment.from_wav(
+                                        str(
+                                            HERE
+                                            / f"../artifacts/{self.__id}_outgoing_buffer_1.wav"
+                                        )
+                                    )
+                                    combined_audio += buffered_audio
+                                    
+                                    # write audio to buffer 0
                                     with wave.open(
                                         str(
                                             HERE
@@ -502,7 +687,13 @@ class Softphone:
                                         buffer_0.writeframes(chunk)
                                         time.sleep(delay)
 
+                        # save cache file
+                        if cache_audio:
+                            combined_audio.export(str(cached_audio_path), format="wav")
+                            
                         time.sleep(delay)
+                        
+                        self.__audio_output_lock.release()
                         # play residue audio from last buffer
                         # try:
                         #     if buffer_switch:
@@ -530,6 +721,7 @@ class Softphone:
                         e,
                     )
                     traceback.print_exc()
+                    self.__audio_output_lock.release()
                 return
         print("No available audio media")
 
@@ -579,7 +771,7 @@ class Softphone:
         """
         # skip silence
         if not self.__record_incoming_audio(self.__config["silence_sample_interval"]):
-            return ""
+            return "##INTERRUPTED##"
 
         last_segment = AudioSegment.from_wav(
             str(HERE / f"../artifacts/{self.__id}_incoming.wav")
@@ -592,14 +784,19 @@ class Softphone:
             if not self.__record_incoming_audio(
                 self.__config["silence_sample_interval"]
             ):
-                return ""
+                return "##INTERRUPTED##"
             last_segment = AudioSegment.from_wav(
                 str(HERE / f"../artifacts/{self.__id}_incoming.wav")
             )
 
         # record audio while over silence threshold
         combined_segments = last_segment
-        while last_segment.dBFS > self.__config["silence_threshold"]:
+        active_threshold = self.__config["silence_threshold"]
+        
+        while last_segment.dBFS > active_threshold:
+            
+            # adapt thrshold to current noise level
+            active_threshold = last_segment.dBFS - 5
 
             if not self.active_call or self.__paired_call:
                 return ""
@@ -607,7 +804,7 @@ class Softphone:
             if not self.__record_incoming_audio(
                 self.__config["speaking_sample_interval"]
             ):
-                return ""
+                return "##INTERRUPTED##"
             last_segment = AudioSegment.from_wav(
                 str(HERE / f"../artifacts/{self.__id}_incoming.wav")
             )
@@ -627,38 +824,57 @@ class Softphone:
         )
         return transcription.text
 
-    def __record_incoming_audio(self, duration=1.0):
+    def __record_incoming_audio(self, duration=1.0, unavailable_media_timeout=60):
         """
-        Record incoming audio from the active call for a specified duration and safe it as an artifact WAVE file.
+        Record incoming audio from the active call for a specified duration and save it as an artifact WAVE file.
 
         Args:
             duration (float, optional): The duration in seconds to record the audio. Defaults to 1.0.
+            unavailable_media_timeout (int, optional): The timeout in seconds to wait if call media becomes unavailable (eg. due to holding the call). Defaults to 60.
 
         Returns:
             bool: True if the recording was successful, False otherwise.
         """
-        call_info = self.active_call.getInfo()
-        for i in range(len(call_info.media)):
-            if (
-                call_info.media[i].type == pj.PJMEDIA_TYPE_AUDIO
-                and call_info.media[i].status == pj.PJSUA_CALL_MEDIA_ACTIVE
-            ):
-                call_media = self.active_call.getAudioMedia(i)
+        waited_on_media = 0
+        while waited_on_media < unavailable_media_timeout:
+            call_info = self.active_call.getInfo()
+            for i in range(len(call_info.media)):
+                if (
+                    call_info.media[i].type == pj.PJMEDIA_TYPE_AUDIO
+                    and call_info.media[i].status == pj.PJSUA_CALL_MEDIA_ACTIVE
+                ):
+                    call_media = self.active_call.getAudioMedia(i)
 
-                self.__media_recorder = pj.AudioMediaRecorder()
-                self.__media_recorder.createRecorder(
-                    str(HERE / f"../artifacts/{self.__id}_incoming.wav")
-                )
-                call_media.startTransmit(self.__media_recorder)
-                time.sleep(duration)
+                    self.__media_recorder = pj.AudioMediaRecorder()
+                    self.__media_recorder.createRecorder(
+                        str(HERE / f"../artifacts/{self.__id}_incoming.wav")
+                    )
+                    call_media.startTransmit(self.__media_recorder)
+                    time.sleep(duration)
 
-                if not self.__media_recorder or not self.active_call:
-                    return False
+                    # call was terminated while recording.
+                    if not self.__media_recorder or not self.active_call:
+                        return False
+                    
+                    # call media no longer active. probably holding. Wait for media.
+                    call_info = self.active_call.getInfo()
+                    if not call_info.media[i].status == pj.PJSUA_CALL_MEDIA_ACTIVE:
+                        call_media.stopTransmit(self.__media_recorder)
+                        time.sleep(1)
+                        waited_on_media += 1
+                        continue
 
-                call_media.stopTransmit(self.__media_recorder)
-                del self.__media_recorder
-
-        return True
+                    # recorded successfully
+                    call_media.stopTransmit(self.__media_recorder)
+                    del self.__media_recorder
+                    return True
+              
+            # no available call media. probably holding. Wait for media. 
+            time.sleep(1)
+            waited_on_media += 1
+            continue
+        
+        return False
 
 
 class SoftphoneGroup:
@@ -688,7 +904,7 @@ class SoftphoneGroup:
 
         # Initialize PJSUA2 endpoint
         ep_cfg = pj.EpConfig()
-        ep_cfg.uaConfig.threadCnt = 1
+        ep_cfg.uaConfig.threadCnt = 2
         ep_cfg.logConfig.level = 1
         ep_cfg.logConfig.consoleLevel = 1
         self.pjsua_endpoint = pj.Endpoint()
