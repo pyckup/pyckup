@@ -738,7 +738,7 @@ class LLMExtractor:
                     "content": [
                         {
                             "type": "input_text",
-                            "text": f"Extract a choice from multiple options from the user. If the user derivates from the topic, lead them gently back to it. Possible choices: {item["options"].keys()}",
+                            "text": f"Present the choice to the user and ask them to select one of the given options. If the user derivates from the topic, lead them gently back to it. Choice: {item["choice"]}, Possible options: {item["options"].keys()}",
                         }
                     ]
                 }
@@ -764,7 +764,6 @@ class LLMExtractor:
                 self.__extraction_aborted({})
                 
             self.__conversation_items = item["options"][selected_choice]
-            self.__current_item = self.__conversation_items.pop(0)
     
             responses = [("Realtime Conversation", "choice")]
             requires_interaction = False

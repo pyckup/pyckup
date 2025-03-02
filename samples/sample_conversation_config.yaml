@@ -4,6 +4,15 @@ conversation_paths:
     - type: read # read out the specified text
       text: Hello, thank you for calling. 
       interactive: false
+    - type: choice ## DEBUG
+      choice: Are you Marius?
+      options:
+        I am Marius:
+          - type: read
+            text: Hello Marius!
+        I am not Marius:
+          - type: read
+            text: Hallo Nicht Marius!
     - type: information # ask for information, continue until provided
       title: name
       description: The first name of the user. 
