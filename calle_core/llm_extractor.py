@@ -91,8 +91,17 @@ class LLMExtractor:
         self.__current_item_in_progress = False
         
         if self.__realtime:
-            threading.Thread(target=self.__run_realtime_client).start()
-            threading.Thread(target=self.__send_outgoing_buffer).start()
+            self.__webclient_thread = threading.Thread(target=self.__run_realtime_client)
+            self.__outgoing_buffer_thread = threading.Thread(target=self.__send_outgoing_buffer)
+            
+            self.__webclient_thread.start()
+            self.__outgoing_buffer_thread.start()
+    
+    def __del__(self):
+        if self.__realtime_connection:
+            self.__realtime_connection.close()
+            self.__webclient_thread.join()
+            self.__outgoing_buffer_thread.join()
         
     def __run_realtime_client(self):
         """
@@ -539,8 +548,22 @@ class LLMExtractor:
         self.__current_item_in_progress = True
         
         # wait until callback by model
-        while self.__current_item_in_progress:
+        while self.__current_item_in_progress and self.__softphone.has_picked_up_call():
             time.sleep(0.2)
+            
+        if not self.__softphone.has_picked_up_call():
+            self.status = ExtractionStatus.ABORTED
+            return None, None
+        
+        # model has responded, we stop listening for user input
+        event = {
+                "type": "session.update",
+                "session": {
+                    "turn_detection": None,
+                    "tools": [],
+                }
+            }
+        self.__realtime_connection.send(json.dumps(event))
             
         chat_messages = self.__current_item_messages
         args = self.__current_item_callback_args
@@ -637,7 +660,7 @@ class LLMExtractor:
                     "content": [
                         {
                             "type": "input_text",
-                            "text": f"Extract a piece of information from the user. If the user derivates from the topic, lead them gently back to it. Required information: {item['description']}",
+                            "text": f"Extract a piece of information from the user. If the user derivates from the topic, lead them gently back to it. Once you have the information, don't give any response. Required information: {item['description']}",
                         }
                     ]
                 }
@@ -654,6 +677,10 @@ class LLMExtractor:
             self.__realtime_connection.send(json.dumps(response_event))
             
             callback_args, chat_messages = self.__wait_for_model_callback()
+            
+            # aborted while waiting
+            if callback_args is None:
+                return [], [], True
             
             # extract information from callback
             # TODO: we assume model ouputs always right args. Maybe introduce a null check and handle by repeating, as in the non-realtime case
@@ -738,7 +765,7 @@ class LLMExtractor:
                     "content": [
                         {
                             "type": "input_text",
-                            "text": f"Present the choice to the user and ask them to select one of the given options. If the user derivates from the topic, lead them gently back to it. Choice: {item["choice"]}, Possible options: {item["options"].keys()}",
+                            "text": f"Present the choice to the user and ask them to select one of the given options. If the user derivates from the topic, lead them gently back to it. Once you have the selected option, don't give any response. Choice: {item["choice"]}, Possible options: {item["options"].keys()}",
                         }
                     ]
                 }
@@ -755,6 +782,10 @@ class LLMExtractor:
             self.__realtime_connection.send(json.dumps(response_event))
             
             callback_args, chat_messages = self.__wait_for_model_callback()
+            
+            # aborted while waiting
+            if callback_args is None:
+                return [], [], True
             
             # extract choice and update conversation path accordingly
             # TODO: we assume model ouputs always right args. Maybe introduce a null check and handle by repeating, as in the non-realtime case
@@ -805,6 +836,9 @@ class LLMExtractor:
         if response_text:
             responses = [(response_text, "function")]
             chat_messages = [AIMessage(content=response_text)]
+        else:
+            responses = [("", "function")]
+            chat_messages = []
             
         requires_interaction = self.__realtime
             
