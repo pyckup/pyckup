@@ -4,6 +4,9 @@ conversation_paths:
     - type: read # read out the specified text
       text: Hello, thank you for calling. 
       interactive: false
+    - type: prompt # give instructions to the LLM
+      prompt: Give the user a compliment in a short sentence.
+      interactive: false
     - type: information # ask for information, continue until provided
       title: name
       description: The first name of the user. 
@@ -34,7 +37,7 @@ conversation_paths:
       module: samples.sample_trunks
       function: say_goodbye
   aborted: # path to be taken if the conversation is aborted by the user
-    - type: prompt # give instructions to the LLM
+    - type: prompt
       prompt: Apologize to the user.
       interactive: false
     - type: read

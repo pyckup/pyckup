@@ -91,6 +91,7 @@ class LLMExtractor:
         self.__current_item_in_progress = False
         
         if self.__realtime:
+            self.__response_done = False # True if model has processed most recent prompt
             self.__webclient_thread = threading.Thread(target=self.__run_realtime_client)
             self.__outgoing_buffer_thread = threading.Thread(target=self.__send_outgoing_buffer)
             
@@ -142,6 +143,7 @@ class LLMExtractor:
                 audio_bytes = base64.b64decode(encoded_audio)
                 self.__incoming_buffer.put(audio_bytes)  
             elif server_event['type'] == "response.done":
+                self.__response_done = True
                 # track transcribed model output
                 if len(server_event['response']['output']) <= 0 or hasattr(server_event['response']['output'][0], 'content') == False:
                     return
@@ -187,6 +189,17 @@ class LLMExtractor:
                 time.sleep(0.2)
                 continue
         
+            # wait for buffer to be started filling
+            while len(self.__outgoing_buffer.queue) == 0:
+                time.sleep(0.2)
+                
+            # wait for buffer to be filled up by a single message
+            previous_buffer_length = len(self.__outgoing_buffer.queue)
+            time.sleep(0.2)
+            while len(self.__outgoing_buffer.queue) != previous_buffer_length:
+                previous_buffer_length = len(self.__outgoing_buffer.queue)
+                time.sleep(0.2)
+                
             audio_bytes = self.__outgoing_buffer.get()
             encoded_audio = base64.b64encode(audio_bytes).decode('utf-8')            
             event = {
@@ -550,7 +563,7 @@ class LLMExtractor:
         # wait until callback by model
         while self.__current_item_in_progress and self.__softphone.has_picked_up_call():
             time.sleep(0.2)
-            
+                        
         if not self.__softphone.has_picked_up_call():
             self.status = ExtractionStatus.ABORTED
             return None, None
@@ -593,8 +606,73 @@ class LLMExtractor:
             tuple: A tuple containing the responses (list), chat messages (list), and a boolean indicating if interaction is required (bool).
         """
         if self.__realtime:
-            raise NotImplementedError()
+            # REALTIME CASE
+            # enable VAD, define callback function
+            session_update_event = {
+                "type": "session.update",
+                "session": {
+                    "turn_detection": {
+                        "type": "server_vad",
+                        "threshold": 0.5,
+                        "prefix_padding_ms": 300,
+                        "silence_duration_ms": 500,
+                        "create_response": True
+                    },
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": "prompt_callback",
+                            "description": f"Call this function after your first answer. As argument give the response you made.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "response": { "type": "string" }
+                                },
+                                "required": ["response"]
+                            }
+                        }
+                    ],
+                }
+            }
+            self.__realtime_connection.send(json.dumps(session_update_event))
+            
+            # instruct the model to execute prompt
+            conversation_item_event = {
+                "type": "conversation.item.create",
+                "item": {
+                    "type": "message",
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": f"Execute the given prompt: {item['prompt']}",
+                        }
+                    ]
+                }
+            }
+            self.__realtime_connection.send(json.dumps(conversation_item_event))
+
+            self.__current_item_messages = []
+            self.__response_done = False
+
+            # initiate a model response
+            response_event = {
+                "type": "response.create",
+                "response": {
+                    "modalities": [ "text", "audio" ],
+                }
+            }
+            self.__realtime_connection.send(json.dumps(response_event))
+            
+            self.__softphone.prioritize_external_audio()
+            # wait for audio packages to arrive
+            while not self.__response_done:
+                time.sleep(0.2)
+            
+            responses = [("Realtime Conversation", "prompt")]
+            chat_messages = self.__current_item_messages
         else:
+            # NON-REALTIME CASE
             response_text = self.__execute_prompt(item["prompt"]) + "\n"
             responses = [(response_text, "prompt")]
             chat_messages = [AIMessage(content=response_text)]

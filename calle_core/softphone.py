@@ -124,6 +124,7 @@ class Softphone:
         self.__group.add_phone(self)
 
         self.__id = uuid.uuid4()
+        self.active_call = None
         self.__paired_call = None
 
         self.__media_player_1 = None
@@ -135,6 +136,7 @@ class Softphone:
         self.__external_incoming_buffer_thread = None
         self.__external_outgoing_buffer_thread = None
         self.__audio_output_lock = threading.Lock() # determines, which thread can use softphone for output
+        self.__prioritize_external_audio = False # True if next the next external message should be played before internal (say)
         self.__interrupt_audio_output = False # set to True to interrupt audio output (eg. when user starts speaking)
 
         # Initialize OpenAI
@@ -204,10 +206,12 @@ class Softphone:
                 while not self.__external_incoming_buffer.empty():
                     audio_chunk = self.__external_incoming_buffer.get()
                     incoming_audio_chunks.append(audio_chunk)
+                    time.sleep(0.1) # ensure that still incoming packages are caught as part of the same response
 
                 if incoming_audio_chunks:
                     self.__audio_output_lock.acquire()
                     self.__interrupt_audio_output = False
+                    self.__prioritize_external_audio = False
                     
                     if not self.has_picked_up_call():
                         self.__audio_output_lock.release()
@@ -574,6 +578,10 @@ class Softphone:
         
         if message is None or message == "":
             return
+        
+        # check for priority external audio
+        while self.__prioritize_external_audio:
+            time.sleep(0.2)
         
         # wait for incoming buffer to finish playing
         self.__audio_output_lock.acquire()
@@ -946,7 +954,7 @@ class Softphone:
         while last_segment.dBFS > active_threshold:
             
             # adapt thrshold to current noise level
-            active_threshold = last_segment.dBFS - 5
+            active_threshold = last_segment.dBFS - 3
 
             if not self.active_call or self.__paired_call:
                 return True, ""
@@ -959,8 +967,17 @@ class Softphone:
                 str(HERE / f"../artifacts/{self.__id}_incoming.wav")
             )
             combined_segments += last_segment
-        
+                    
         return True, combined_segments
+    
+    def prioritize_external_audio(self):
+        """
+        Prioritize the playback of external audio over internal audio for the next external message.
+
+        Returns:
+            None
+        """
+        self.__prioritize_external_audio = True
 
 
 class SoftphoneGroup:
