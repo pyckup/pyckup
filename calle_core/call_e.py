@@ -271,6 +271,7 @@ class call_e:
                 for response in extractor_responses:
                     if response[1] == "read" or response[1] == "function":
                         softphone.say(response[0], cache_audio=True)
+            softphone.wait_for_external_output_finish()
              
         else:
             # NOT-REALTIME CASE

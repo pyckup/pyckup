@@ -2,36 +2,52 @@ conversation_title: Sample Conversation
 conversation_paths:
   entry: # entry point of the conversation
     - type: read # read out the specified text
-      text: Hello, thank you for calling. 
+      text: Hello, thank you for calling. Do you want to introduce yourself?
       interactive: false
-    - type: prompt # give instructions to the LLM
-      prompt: Give the user a compliment in a short sentence.
-      interactive: false
-    - type: information # ask for information, continue until provided
-      title: name
-      description: The first name of the user. 
-      format: The first name of the user, starting with a capital letter.
-      interactive: false
-    - type: function_choice # call a function from the provided module. Return value determines the path chosen.
-      module: samples.sample_trunks
-      function: name_is_marius
+    - type: choice # ask the user to choose between multiple options
+      choice: Do you want to introduce yourself?
+      silent: True # for silent choices, the options will not be read out
       options:
-        True:
-          - type: path # go to the specified path
-            path: is_marius
-        False:
-          - type: path
-            path: is_not_marius
+        - option: I do
+          dial_number: 1 # user can dial this number to select the option (only realtime)
+          items:
+            - type: information # ask for information, continue until provided
+              title: name
+              description: The first name of the user. 
+              format: The first name of the user, starting with a capital letter.
+              interactive: false
+            - type: function_choice # call a function from the provided module. Return value determines the path chosen.
+              module: samples.sample_trunks
+              function: name_is_marius
+              options:
+                - option: True
+                  items:
+                    - type: path # go to the specified path
+                      path: is_marius
+                - option: False
+                  items:
+                    - type: path
+                      path: is_not_marius
+        - option: I don't
+          dial_number: 2
+          items:
+            - type: prompt # give instructions to the LLM
+              prompt: Wish the user a nice day.
+              interactive: false
   is_marius:
     - type: choice # ask the user to choose between multiple options
       choice: Do you prefer apples or oranges?
       options:
-        apples::
-          - type: read
-            text: Apples are great!
-        oranges:
-          - type: read
-            text: Oranges are great!
+        - option: apples
+          dial_number: 1
+          items:
+            - type: read
+              text: Apples are great!
+        - option: oranges
+          dial_number: 1
+          items:
+            - type: read
+              text: Oranges are great!
   is_not_marius:
     - type: function
       module: samples.sample_trunks

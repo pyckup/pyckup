@@ -52,6 +52,10 @@ class SoftphoneCall(pj.Call):
             self.softphone.hangup(paired_only=self.__is_paired)
 
         super(SoftphoneCall, self).onCallState(prm)
+        
+    def onDtmfDigit(self, prm):
+        for reciever in self.softphone.dtmf_recievers:
+            reciever(prm.digit)
 
 
 class GroupAccount(pj.Account):
@@ -131,6 +135,8 @@ class Softphone:
         self.__media_player_2 = None
         self.__media_recorder = None
         
+        self.dtmf_recievers = []
+        
         self.__external_incoming_buffer = queue.Queue()
         self.__external_outgoing_buffer = queue.Queue()
         self.__external_incoming_buffer_thread = None
@@ -206,7 +212,7 @@ class Softphone:
                 while not self.__external_incoming_buffer.empty():
                     audio_chunk = self.__external_incoming_buffer.get()
                     incoming_audio_chunks.append(audio_chunk)
-                    time.sleep(0.1) # ensure that still incoming packages are caught as part of the same response
+                    time.sleep(0.2) # ensure that still incoming packages are caught as part of the same response
 
                 if incoming_audio_chunks:
                     self.__audio_output_lock.acquire()
@@ -304,6 +310,19 @@ class Softphone:
         self.__external_outgoing_buffer_thread.start()
         
         return self.__external_incoming_buffer, self.__external_outgoing_buffer
+    
+    def wait_for_external_output_finish(self):
+        """
+        Wait until no audio is being output to external sources.
+        
+        Returns:
+            None
+        """
+        while self.__prioritize_external_audio:
+            time.sleep(0.2)
+            
+        self.__audio_output_lock.acquire()
+        self.__audio_output_lock.release()
 
     def call(self, phone_number):
         """
@@ -978,6 +997,24 @@ class Softphone:
             None
         """
         self.__prioritize_external_audio = True
+        
+    def add_dtmf_reciever(self, reciever_function):
+        """
+        Subscribe a function to recieve DTMF signals from the active call.
+        
+        Returns:
+            None
+        """
+        self.dtmf_recievers.append(reciever_function)
+
+    def remove_dtmf_reciever(self, reciever_function):
+        """
+        Unsubscribe a function from recieving DTMF signals from the active call.
+        
+        Returns:
+            None
+        """
+        self.dtmf_recievers.remove(reciever_function)
 
 
 class SoftphoneGroup:
@@ -1066,3 +1103,5 @@ class SoftphoneGroup:
         if len(self.softphones) == 0:
             self.pjsua_account.shutdown()
             self.pjsua_endpoint.libDestroy()
+            
+    
