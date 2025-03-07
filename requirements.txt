@@ -6,4 +6,4 @@ openai
 langchain-core
 langchain-openai
 langchain-community
-sqlite3
+websocket-client
