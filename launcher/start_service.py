@@ -1,0 +1,53 @@
+
+import argparse
+import os
+from utils import get_service_id
+
+def start_service(name, conversation_config_base64, sip_credentials_base64, num_devices):
+    service_id = get_service_id(name)
+    
+    # Write service config
+    service_config = f"""
+    [Unit]
+    Description=Runs Call-E instance {name}   
+    After=network.target
+
+    [Service]
+    ExecStart=/home/ubuntu/call-e/calle/bin/python /home/ubuntu/call-e/launcher/launcher.py
+    WorkingDirectory=/home/ubuntu/call-e/
+    Environment="name={name}"
+    Environment="sip_credentials_base64={sip_credentials_base64}"
+    Environment="conversation_config_base64={conversation_config_base64}"
+    Environment="num_devices={num_devices}"
+    Environment="PYTHONPATH=${{PYTHONPATH}}:/home/ubuntu/call-e"
+    Environment="OPENAI_API_KEY={os.environ['OPENAI_API_KEY']}"
+    Restart=always
+    User=ubuntu
+    Group=ubuntu
+    StandardOutput=append:/home/ubuntu/call-e/launcher/artifacts/{name}.log
+
+    [Install]
+    WantedBy=multi-user.target
+    """
+    
+    service_file_path = f"/etc/systemd/system/{service_id}.service"
+    with open(service_file_path, 'w') as service_file:
+        service_file.write(service_config)
+        
+    # Execute service
+    os.system(f"sudo systemctl daemon-reload")
+    os.system(f"sudo systemctl enable {service_id}")
+    os.system(f"sudo systemctl start {service_id}")
+    
+    print(f"Started service {service_id}")
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Start Call-E instance as a systemd service.')
+    parser.add_argument('name', type=str, help='Name of the service')
+    parser.add_argument('conversation_config_base64', type=str, help='Base64 encoded conversation configuration')
+    parser.add_argument('sip_credentials_base64', type=str, help='Base64 encoded SIP credentials')
+    parser.add_argument('num_devices', type=int, help='Number of possible simultaneous devices')
+
+    args = parser.parse_args()
+    
+    start_service(args.name, args.conversation_config_base64, args.sip_credentials_base64, args.num_devices)

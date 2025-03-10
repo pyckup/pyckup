@@ -575,7 +575,7 @@ class call_e:
         conversation_config, conversation_title = self.setup_conversation(conversation_config_path)
 
         sf_group = SoftphoneGroup(self.__sip_credentials_path)
-        for i in range(num_devices):
+        for i in range(int(num_devices)):
             sf = Softphone(self.__sip_credentials_path, sf_group)
             listen_thread = threading.Thread(
                 target=self.__softphone_listen,

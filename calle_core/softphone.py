@@ -151,6 +151,10 @@ class Softphone:
         # Ensure cache directory exists
         if not os.path.exists(HERE / "../cache"):
             os.makedirs(HERE / "../cache")
+        
+        # Ensure artifacts directory exists
+        if not os.path.exists(HERE / "../artifacts"):
+            os.makedirs(HERE / "../artifacts")
 
     def __del__(self):
         self.__media_player_1 = None
@@ -1051,9 +1055,22 @@ class SoftphoneGroup:
         self.pjsua_endpoint.libCreate()
         self.pjsua_endpoint.libInit(ep_cfg)
 
-        sipTpConfig = pj.TransportConfig()
-        sipTpConfig.port = 5060
-        self.pjsua_endpoint.transportCreate(pj.PJSIP_TRANSPORT_UDP, sipTpConfig)
+        # Try to create transport on first available port
+        port = 5060
+        max_port_attempts = 10
+        for attempt in range(max_port_attempts):
+            try:
+                sipTpConfig = pj.TransportConfig()
+                sipTpConfig.port = port
+                self.pjsua_endpoint.transportCreate(pj.PJSIP_TRANSPORT_UDP, sipTpConfig)
+                print(f"Transport created on port {port}")
+                break
+            except pj.Error as e:
+                port += 1
+        else:
+            raise RuntimeError("No available port for transport")
+        
+        
         self.pjsua_endpoint.libStart()
 
         # Create SIP Account
