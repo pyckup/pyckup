@@ -3,7 +3,7 @@ import argparse
 import os
 from utils import get_service_id
 
-def start_service(name, conversation_config_base64, sip_credentials_base64, num_devices):
+def start_service(name, conversation_config_base64, sip_credentials_base64, num_devices, openai_key):
     service_id = get_service_id(name)
     
     # Write service config
@@ -20,7 +20,7 @@ def start_service(name, conversation_config_base64, sip_credentials_base64, num_
     Environment="conversation_config_base64={conversation_config_base64}"
     Environment="num_devices={num_devices}"
     Environment="PYTHONPATH=${{PYTHONPATH}}:/home/ubuntu/call-e"
-    Environment="OPENAI_API_KEY={os.environ['OPENAI_API_KEY']}"
+    Environment="OPENAI_API_KEY={openai_key}"
     Restart=always
     User=ubuntu
     Group=ubuntu
@@ -47,7 +47,9 @@ if __name__ == "__main__":
     parser.add_argument('conversation_config_base64', type=str, help='Base64 encoded conversation configuration')
     parser.add_argument('sip_credentials_base64', type=str, help='Base64 encoded SIP credentials')
     parser.add_argument('num_devices', type=int, help='Number of possible simultaneous devices')
+    parser.add_argument('openai_key', type=str, help='OpenAI API key')
+
 
     args = parser.parse_args()
     
-    start_service(args.name, args.conversation_config_base64, args.sip_credentials_base64, args.num_devices)
+    start_service(args.name, args.conversation_config_base64, args.sip_credentials_base64, args.num_devices, args.openai_key)
