@@ -35,7 +35,7 @@ class LLMExtractor:
         realtime (bool, optional): Whether to use the OpenAI realtime API. Defaults to True.
         incoming_buffer (Queue, optional): Queue for incoming audio data. Defaults to None Has to be specified when using realtime.
         outgoing_buffer (Queue, optional): Queue for outgoing audio data. Defaults to None. Has to be specified when using realtime.
-    
+
     """
 
     def __init__(
@@ -61,14 +61,20 @@ class LLMExtractor:
 
         self.__conversation_config = copy.deepcopy(conversation_config)
         self.__load_conversation_path("entry")
-        self.__conversation_state = {} #includes extracted information and can be used to store data conversation-wide
-        self.__conversation_state_lock = threading.Lock() # acquire this before accessing the conversation state
-        self.__repeat_item = None # if information filtering failed, the item is repeated
+        self.__conversation_state = (
+            {}
+        )  # includes extracted information and can be used to store data conversation-wide
+        self.__conversation_state_lock = (
+            threading.Lock()
+        )  # acquire this before accessing the conversation state
+        self.__repeat_item = (
+            None  # if information filtering failed, the item is repeated
+        )
 
         self.__softphone = softphone
-        
+
         softphone.add_dtmf_reciever(self.__check_dialled_choice)
-        self.__dialled_choice = None # the choice selected by user dial input
+        self.__dialled_choice = None  # the choice selected by user dial input
 
         self.information_extraction_chain = self.__verify_information | RunnableBranch(
             (
@@ -93,7 +99,7 @@ class LLMExtractor:
             ),
             self.__choice_extraction_successful,
         )
-        
+
         # realtime stuff
         self.__realtime = realtime
         self.__realtime_connection = None
@@ -102,37 +108,41 @@ class LLMExtractor:
         self.__current_item_messages = []
         self.__current_item_callback_args = ""
         self.__current_item_in_progress = False
-        self.__response_done = False # True if model has processed most recent prompt
-        self.__accepts_user_input = False # Is user supposed to talk right now?
+        self.__response_done = False  # True if model has processed most recent prompt
+        self.__accepts_user_input = False  # Is user supposed to talk right now?
 
-        
         if self.__realtime:
-            self.__webclient_thread = threading.Thread(target=self.__run_realtime_client)
-            self.__outgoing_buffer_thread = threading.Thread(target=self.__send_outgoing_buffer)
-            
+            self.__webclient_thread = threading.Thread(
+                target=self.__run_realtime_client
+            )
+            self.__outgoing_buffer_thread = threading.Thread(
+                target=self.__send_outgoing_buffer
+            )
+
             self.__webclient_thread.start()
             self.__outgoing_buffer_thread.start()
-    
+
     def __del__(self) -> None:
         self.__softphone.remove_dtmf_reciever(self.__check_dialled_choice)
-        
+
         if self.__realtime_connection:
             self.__realtime_connection.close()
             self.__webclient_thread.join()
             self.__outgoing_buffer_thread.join()
-        
+
     def __run_realtime_client(self) -> None:
         """
-    Establish and manage a real-time WebSocket connection with the OpenAI API.
-    
-    Event Handlers:
-        on_open(ws): Sends session parameters to the server when the connection is opened.
-        on_message(ws, message): Processes incoming messages from the server.
-        on_error(error): Prints the error message and stack trace if an error occurs.
+        Establish and manage a real-time WebSocket connection with the OpenAI API.
 
-    Returns:
-        None
-    """
+        Event Handlers:
+            on_open(ws): Sends session parameters to the server when the connection is opened.
+            on_message(ws, message): Processes incoming messages from the server.
+            on_error(error): Prints the error message and stack trace if an error occurs.
+
+        Returns:
+            None
+        """
+
         def on_open(ws):
             # set up session parameters
             event = {
@@ -144,47 +154,57 @@ class LLMExtractor:
                     "output_audio_format": "pcm16",
                     "turn_detection": None,
                     "tools": [],
-                    "input_audio_transcription": {
-                        "model": "whisper-1"
-                    },
-                }
+                    "input_audio_transcription": {"model": "whisper-1"},
+                },
             }
             ws.send(json.dumps(event))
-         
-    
+
         def on_message(ws, message):
             server_event = json.loads(message)
-            if server_event['type'] == "response.audio.delta":
+            if server_event["type"] == "response.audio.delta":
                 # append incoming audio to buffer
-                encoded_audio = server_event['delta']
+                encoded_audio = server_event["delta"]
                 audio_bytes = base64.b64decode(encoded_audio)
-                self.__incoming_buffer.put(audio_bytes)  
-            elif server_event['type'] == "response.done":
+                self.__incoming_buffer.put(audio_bytes)
+            elif server_event["type"] == "response.done":
                 self.__response_done = True
                 # track transcribed model output
-                if len(server_event['response']['output']) <= 0 or hasattr(server_event['response']['output'][0], 'content') == False:
+                if (
+                    len(server_event["response"]["output"]) <= 0
+                    or hasattr(server_event["response"]["output"][0], "content")
+                    == False
+                ):
                     return
-                model_response = server_event['response']['output'][0]['content'][0]['transcript']
+                model_response = server_event["response"]["output"][0]["content"][0][
+                    "transcript"
+                ]
                 self.__current_item_messages.append(AIMessage(content=model_response))
-            elif server_event['type'] == "conversation.item.input_audio_transcription.completed":
+            elif (
+                server_event["type"]
+                == "conversation.item.input_audio_transcription.completed"
+            ):
                 # track transcribed user input
-                user_input = server_event['transcript']
+                user_input = server_event["transcript"]
                 self.__current_item_messages.append(HumanMessage(content=user_input))
-            elif server_event['type'] == "response.function_call_arguments.done":
+            elif server_event["type"] == "response.function_call_arguments.done":
                 # callback sent from model
-                self.__current_item_callback_args = json.loads(server_event['arguments'])
+                self.__current_item_callback_args = json.loads(
+                    server_event["arguments"]
+                )
                 self.__current_item_in_progress = False
-        
+
         def on_error(error):
             print(f"An error occured in OpenAI realtime connection: {error}")
             traceback.print_exc()
-            
-        api_url = "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17"
+
+        api_url = (
+            "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17"
+        )
         headers = [
-            f"Authorization: Bearer {os.environ["OPENAI_API_KEY"]}",
-            "OpenAI-Beta: realtime=v1"
+            f"Authorization: Bearer {os.environ['OPENAI_API_KEY']}",
+            "OpenAI-Beta: realtime=v1",
         ]
-        
+
         self.__realtime_connection = websocket.WebSocketApp(
             api_url,
             header=headers,
@@ -193,7 +213,7 @@ class LLMExtractor:
         )
         self.__realtime_connection.on_open = on_open
         self.__realtime_connection.run_forever()
-    
+
     def __send_outgoing_buffer(self) -> None:
         """
         Send outgoing audio buffer encoded as base64 to the OpenAI realtime API.
@@ -205,36 +225,32 @@ class LLMExtractor:
             if self.__realtime_connection is None:
                 time.sleep(0.2)
                 continue
-        
+
             # wait for buffer to be started filling
             while len(self.__outgoing_buffer.queue) == 0:
                 time.sleep(0.2)
-                
+
             # wait for buffer to be filled up by a single message
             previous_buffer_length = len(self.__outgoing_buffer.queue)
             time.sleep(0.2)
             while len(self.__outgoing_buffer.queue) != previous_buffer_length:
                 previous_buffer_length = len(self.__outgoing_buffer.queue)
                 time.sleep(0.2)
-            
-                
+
             audio_bytes = self.__outgoing_buffer.get()
-            
+
             if not self.__accepts_user_input:
                 continue
-            
-            encoded_audio = base64.b64encode(audio_bytes).decode('utf-8')            
-            append_event = {
-                "type": "input_audio_buffer.append",
-                "audio": encoded_audio
-            }
+
+            encoded_audio = base64.b64encode(audio_bytes).decode("utf-8")
+            append_event = {"type": "input_audio_buffer.append", "audio": encoded_audio}
             self.__realtime_connection.send(json.dumps(append_event))
-            
+
             commit_event = {
                 "type": "input_audio_buffer.commit",
             }
             self.__realtime_connection.send(json.dumps(commit_event))
-            
+
             response_event = {
                 "type": "response.create",
             }
@@ -266,12 +282,12 @@ class LLMExtractor:
         Returns:
             dict: The updated data dictionary with the 'information_verification_status' key added.
         """
-        
+
         # If this method was triggered by a previous item, then the input can't be relevant for this extraction
         if data["is_recursive"]:
             data["information_verification_status"] = "NO"
             return data
-        
+
         verification_prompt = ChatPromptTemplate.from_messages(
             [
                 (
@@ -305,12 +321,12 @@ class LLMExtractor:
         Returns:
             dict: The updated data dictionary with the 'choice' key added.
         """
-        
+
         # If this method was triggered by a previous item, then the input can't be relevant for this extraction
         if data["is_recursive"]:
             data["choice"] = "##NONE##"
             return data
-        
+
         verification_prompt = ChatPromptTemplate.from_messages(
             [
                 (
@@ -329,7 +345,6 @@ class LLMExtractor:
                     "system",
                     "Choice prompt: {current_choice}, Possible choice options: {current_choice_options}",
                     # "Possible choice options: {current_choice_options}",
-
                 ),
                 ("user", "{input}"),
                 MessagesPlaceholder(variable_name="chat_history"),
@@ -338,7 +353,6 @@ class LLMExtractor:
         verifyer_chain = verification_prompt | self.__llm | StrOutputParser()
         data["choice"] = verifyer_chain.invoke(data).strip()
         return data
-    
 
     def __filter_information(self, data: Dict[str, Any]) -> Optional[str]:
         """
@@ -439,7 +453,9 @@ class LLMExtractor:
         choice_extractor = extraction_prompt | self.__llm | StrOutputParser()
         return choice_extractor
 
-    def __append_filtered_info(self, data: Dict[str, Any], information_item: Dict[str, Any]) -> None:
+    def __append_filtered_info(
+        self, data: Dict[str, Any], information_item: Dict[str, Any]
+    ) -> None:
         """
         Append filtered information thread-safely to the extracted information dictionary.
 
@@ -453,12 +469,12 @@ class LLMExtractor:
         self.__conversation_state_lock.acquire()
         filtered_info = self.__filter_information(data)
         if filtered_info:
-            self.__conversation_state[information_item['title']] = filtered_info
+            self.__conversation_state[information_item["title"]] = filtered_info
             self.__repeat_item = None
         else:
             # information couldn't be extracted, so repeat the item at next possibility
             self.__repeat_item = information_item
-            
+
         self.__conversation_state_lock.release()
 
     def __information_extraction_successful(self, data: Dict[str, Any]) -> str:
@@ -484,7 +500,7 @@ class LLMExtractor:
             return ""
 
         return self.__process_conversation_items(data["input"], is_recursive=True)
-    
+
     def __get_items_for_choice(self, choice: str) -> List[Dict[str, Any]]:
         """
         Get the conversation items for a given choice of the current choice item.
@@ -495,11 +511,18 @@ class LLMExtractor:
         Returns:
             list: The conversation items for the selected choice.
         """
-        if self.__current_item["type"] != "choice" and self.__current_item["type"] != "function_choice":
+        if (
+            self.__current_item["type"] != "choice"
+            and self.__current_item["type"] != "function_choice"
+        ):
             return []
-        
-        return [option for option in self.__current_item["options"] if option['option'] == choice][0]['items']
-    
+
+        return [
+            option
+            for option in self.__current_item["options"]
+            if option["option"] == choice
+        ][0]["items"]
+
     def __get_all_options(self) -> List[str]:
         """
         Get all possible options for the current choice item.
@@ -507,10 +530,13 @@ class LLMExtractor:
         Returns:
             list: The possible options for the current choice item.
         """
-        if self.__current_item["type"] != "choice" and self.__current_item["type"] != "function_choice":
+        if (
+            self.__current_item["type"] != "choice"
+            and self.__current_item["type"] != "function_choice"
+        ):
             return []
-        
-        return [option['option'] for option in self.__current_item["options"]]
+
+        return [option["option"] for option in self.__current_item["options"]]
 
     def __choice_extraction_successful(self, data: Dict[str, Any]) -> str:
         """
@@ -550,7 +576,7 @@ class LLMExtractor:
 
         if self.__realtime:
             return
-        
+
         return self.__process_conversation_items(
             data["input"], is_recursive=True, aborted=True
         )
@@ -573,7 +599,7 @@ class LLMExtractor:
         )
         prompt_chain = prompt_template | self.__llm | StrOutputParser()
         return prompt_chain.invoke({"chat_history": self.chat_history})
-    
+
     def __check_item_repetition(self) -> None:
         """
         Check if an item needs to be repeated and insert it at the beginning of the conversation queue.
@@ -583,18 +609,18 @@ class LLMExtractor:
         """
         if not self.__repeat_item:
             return
-                
+
         # inform user that we need a piece of info again
         repeat_prompt_item = {
             "type": "prompt",
             "prompt": "Say (in the current language) that you need to ask again for an information. It doesnt matter if the info is already in the conversation.",
-            "interactive": True
+            "interactive": True,
         }
         self.__conversation_items.insert(0, self.__current_item)
         self.__conversation_items.insert(0, self.__repeat_item)
         self.__current_item = repeat_prompt_item
         self.__repeat_item = None
-    
+
     def __get_conversation_state_lock(self) -> bool:
         """
         Acquire and release the conversation state lock.
@@ -605,7 +631,7 @@ class LLMExtractor:
         self.__conversation_state_lock.acquire()
         self.__conversation_state_lock.release()
         return not self.__repeat_item
-    
+
     def __check_dialled_choice(self, dialled_number: str) -> None:
         """
         Check if the dialled number matches any of the options in the current choice item and update the dialled choice accordingly.
@@ -618,14 +644,16 @@ class LLMExtractor:
         """
         if self.__current_item["type"] != "choice":
             return
-        
+
         for option in self.__current_item["options"]:
             if str(option.get("dial_number", "none")) == str(dialled_number):
                 self.__dialled_choice = option["option"]
                 self.__current_item_in_progress = False
                 return
-    
-    def __wait_for_model_callback(self) -> Tuple[Optional[Dict[str, Any]], Optional[List[Any]]]:
+
+    def __wait_for_model_callback(
+        self,
+    ) -> Tuple[Optional[Dict[str, Any]], Optional[List[Any]]]:
         """
         Wait for a functions callback from the realtime API.
 
@@ -636,37 +664,38 @@ class LLMExtractor:
         self.__current_item_callback_args = None
         self.__current_item_in_progress = True
         self.__dialled_choice = None
-        
+
         # wait until callback by model
         while self.__current_item_in_progress and self.__softphone.has_picked_up_call():
             time.sleep(0.2)
-                        
+
         if not self.__softphone.has_picked_up_call():
             self.status = ExtractionStatus.ABORTED
             return None, None
-        
+
         # model has responded, we stop listening for user input
         event = {
-                "type": "session.update",
-                "session": {
-                    "turn_detection": None,
-                    "tools": [],
-                }
-            }
+            "type": "session.update",
+            "session": {
+                "turn_detection": None,
+                "tools": [],
+            },
+        }
         self.__realtime_connection.send(json.dumps(event))
         self.__accepts_user_input = False
-            
+
         chat_messages = self.__current_item_messages
-        
+
         if self.__dialled_choice:
             args = {"choice": self.__dialled_choice}
         else:
             args = self.__current_item_callback_args
-        
+
         return args, chat_messages
-        
-    
-    def __process_read_item(self, item: Dict[str, Any]) -> Tuple[List[Tuple[str, str]], List[Any], bool]:
+
+    def __process_read_item(
+        self, item: Dict[str, Any]
+    ) -> Tuple[List[Tuple[str, str]], List[Any], bool]:
         """
         Process a conversation item of type read and generate responses.
 
@@ -679,8 +708,10 @@ class LLMExtractor:
         requires_interaction = self.__realtime
 
         return responses, chat_messages, requires_interaction
-    
-    def __process_prompt_item(self, item: Dict[str, Any]) -> Tuple[List[Tuple[str, str]], List[Any], bool]:
+
+    def __process_prompt_item(
+        self, item: Dict[str, Any]
+    ) -> Tuple[List[Tuple[str, str]], List[Any], bool]:
         """
         Process a conversation item of type prompt and generate responses.
 
@@ -690,7 +721,7 @@ class LLMExtractor:
         if self.__realtime:
             # REALTIME CASE
             self.__accepts_user_input = True
-            
+
             # instruct the model to execute prompt
             conversation_item_event = {
                 "type": "conversation.item.create",
@@ -702,8 +733,8 @@ class LLMExtractor:
                             "type": "input_text",
                             "text": f"Execute the given prompt: {item['prompt']}",
                         }
-                    ]
-                }
+                    ],
+                },
             }
             self.__realtime_connection.send(json.dumps(conversation_item_event))
 
@@ -714,16 +745,16 @@ class LLMExtractor:
             response_event = {
                 "type": "response.create",
                 "response": {
-                    "modalities": [ "text", "audio" ],
-                }
+                    "modalities": ["text", "audio"],
+                },
             }
             self.__realtime_connection.send(json.dumps(response_event))
-            
+
             self.__softphone.prioritize_external_audio()
             # wait for audio packages to arrive
             while not self.__response_done:
                 time.sleep(0.2)
-            
+
             responses = [("Realtime Conversation", "prompt")]
             chat_messages = self.__current_item_messages
         else:
@@ -731,20 +762,22 @@ class LLMExtractor:
             response_text = self.__execute_prompt(item["prompt"]) + "\n"
             responses = [(response_text, "prompt")]
             chat_messages = [AIMessage(content=response_text)]
-            
+
         return responses, chat_messages, False
-    
-    def __process_path_item(self, item: Dict[str, Any]) -> Tuple[List[Tuple[str, str]], List[Any], bool]:
+
+    def __process_path_item(
+        self, item: Dict[str, Any]
+    ) -> Tuple[List[Tuple[str, str]], List[Any], bool]:
         """
         Process a conversation item of type path and generate responses.
 
         Returns:
             tuple: A tuple containing the responses (list), chat messages (list), and a boolean indicating if interaction is required (bool).
         """
-        self.__conversation_items = self.__conversation_config[
-                    "conversation_paths"
-                ][item["path"]]
-            
+        self.__conversation_items = self.__conversation_config["conversation_paths"][
+            item["path"]
+        ]
+
         return [], [], False
 
     def __process_information_item(
@@ -758,7 +791,7 @@ class LLMExtractor:
         """
         if self.__realtime:
             self.__accepts_user_input = True
-            #define callback function
+            # define callback function
             session_update_event = {
                 "type": "session.update",
                 "session": {
@@ -769,17 +802,15 @@ class LLMExtractor:
                             "description": f"Call this function once you have sucessfully extracted the information from the user. Provide as a parameter the extracted information. The parameter should be in the following format: {item['format']}. If the user seems uncomfortable or doesn't want to answer, output ##ABORT## as parameter.",
                             "parameters": {
                                 "type": "object",
-                                "properties": {
-                                    "information": { "type": "string" }
-                                },
-                                "required": ["information"]
-                            }
+                                "properties": {"information": {"type": "string"}},
+                                "required": ["information"],
+                            },
                         }
                     ],
-                }
+                },
             }
             self.__realtime_connection.send(json.dumps(session_update_event))
-            
+
             # instruct the model to extract information
             conversation_item_event = {
                 "type": "conversation.item.create",
@@ -791,8 +822,8 @@ class LLMExtractor:
                             "type": "input_text",
                             "text": f"Extract a piece of information from the user. If the user derivates from the topic, lead them gently back to it. Once you have the information, don't give any response. Required information: {item['description']}",
                         }
-                    ]
-                }
+                    ],
+                },
             }
             self.__realtime_connection.send(json.dumps(conversation_item_event))
 
@@ -800,29 +831,29 @@ class LLMExtractor:
             response_event = {
                 "type": "response.create",
                 "response": {
-                    "modalities": [ "text", "audio" ],
-                }
+                    "modalities": ["text", "audio"],
+                },
             }
             self.__realtime_connection.send(json.dumps(response_event))
-            
+
             callback_args, chat_messages = self.__wait_for_model_callback()
-            
+
             # aborted while waiting
             if callback_args is None:
                 return [], [], True
-            
+
             # extract information from callback
             # TODO: we assume model ouputs always right args. Maybe introduce a null check and handle by repeating, as in the non-realtime case
             information = callback_args["information"]
-            
-            if information == '##ABORT##':
+
+            if information == "##ABORT##":
                 self.__extraction_aborted({})
-            
+
             self.__conversation_state_lock.acquire()
-            self.__conversation_state[item['title']] = information
+            self.__conversation_state[item["title"]] = information
             self.__repeat_item = None
             self.__conversation_state_lock.release()
-    
+
             responses = [("Realtime Conversation", "information")]
             requires_interaction = False
         else:
@@ -831,9 +862,7 @@ class LLMExtractor:
                 {
                     "input": user_input,
                     "chat_history": self.chat_history,
-                    "current_information_description": item[
-                        "description"
-                    ],
+                    "current_information_description": item["description"],
                     "current_information_format": item["format"],
                     "is_recursive": is_recursive,
                 }
@@ -845,9 +874,9 @@ class LLMExtractor:
                 responses = [(response, "information")]
                 chat_messages = [AIMessage(content=response)]
             requires_interaction = True
-            
+
         return responses, chat_messages, requires_interaction
-    
+
     def __process_choice_item(
         self, item: Dict[str, Any], user_input: str, is_recursive: bool
     ) -> Tuple[List[Tuple[str, str]], List[Any], bool]:
@@ -870,20 +899,22 @@ class LLMExtractor:
                             "description": f"Call this function once you have sucessfully extracted the selected choice, which should be only one of the following: {self.__get_all_options()}. If the user seems uncomfortable or doesn't want to answer, output ##ABORT## as parameter.",
                             "parameters": {
                                 "type": "object",
-                                "properties": {
-                                    "choice": { "type": "string" }
-                                },
-                                "required": ["choice"]
-                            }
+                                "properties": {"choice": {"type": "string"}},
+                                "required": ["choice"],
+                            },
                         }
                     ],
-                }
+                },
             }
             self.__realtime_connection.send(json.dumps(session_update_event))
-            
+
             # instruct the model to extract choice
             is_silent = item.get("silent", False)
-            silent_prompt_text = "At the start of the conversation say nothing and wait for the user to say something." if is_silent else ""
+            silent_prompt_text = (
+                "At the start of the conversation say nothing and wait for the user to say something."
+                if is_silent
+                else ""
+            )
             conversation_item_event = {
                 "type": "conversation.item.create",
                 "item": {
@@ -892,10 +923,10 @@ class LLMExtractor:
                     "content": [
                         {
                             "type": "input_text",
-                            "text": f"Present the choice to the user and ask them to select one of the given options. If the user derivates from the topic, lead them gently back to it. Once you have the selected option, don't give any response. {silent_prompt_text} Choice: {item["choice"]}, Possible options: {self.__get_all_options()}",
+                            "text": f"Present the choice to the user and ask them to select one of the given options. If the user derivates from the topic, lead them gently back to it. Once you have the selected option, don't give any response. {silent_prompt_text} Choice: {item['choice']}, Possible options: {self.__get_all_options()}",
                         }
-                    ]
-                }
+                    ],
+                },
             }
             self.__realtime_connection.send(json.dumps(conversation_item_event))
 
@@ -904,26 +935,26 @@ class LLMExtractor:
                 response_event = {
                     "type": "response.create",
                     "response": {
-                        "modalities": [ "text", "audio" ],
-                    }
+                        "modalities": ["text", "audio"],
+                    },
                 }
                 self.__realtime_connection.send(json.dumps(response_event))
-            
+
             callback_args, chat_messages = self.__wait_for_model_callback()
-            
+
             # aborted while waiting
             if callback_args is None:
                 return [], [], True
-            
+
             # extract choice and update conversation path accordingly
             # TODO: we assume model ouputs always right args. Maybe introduce a null check and handle by repeating, as in the non-realtime case
             selected_choice = callback_args["choice"]
-            
-            if selected_choice == '##ABORT##':
+
+            if selected_choice == "##ABORT##":
                 self.__extraction_aborted({})
-                
+
             self.__conversation_items = self.__get_items_for_choice(selected_choice)
-    
+
             responses = [("Realtime Conversation", "choice")]
             requires_interaction = False
         else:
@@ -931,16 +962,16 @@ class LLMExtractor:
             if item["silent"] and not item.get("first_run_done", False):
                 item["first_run_done"] = True
                 return [], [], True
-            
+
             response = self.choice_extraction_chain.invoke(
-                    {
-                        "input": user_input,
-                        "chat_history": self.chat_history,
-                        "current_choice": item["choice"],
-                        "current_choice_options": list(self.__get_all_options()),
-                        "is_recursive": is_recursive,
-                    }
-                )
+                {
+                    "input": user_input,
+                    "chat_history": self.chat_history,
+                    "current_choice": item["choice"],
+                    "current_choice_options": list(self.__get_all_options()),
+                    "is_recursive": is_recursive,
+                }
+            )
             if isinstance(response, list):
                 responses = response
                 chat_messages = []
@@ -948,10 +979,12 @@ class LLMExtractor:
                 responses = [(response, "choice")]
                 chat_messages = [AIMessage(content=response)]
             requires_interaction = True
-            
+
         return responses, chat_messages, requires_interaction
-    
-    def __process_function_item(self, item: Dict[str, Any]) -> Tuple[List[Tuple[str, str]], List[Any], bool]:
+
+    def __process_function_item(
+        self, item: Dict[str, Any]
+    ) -> Tuple[List[Tuple[str, str]], List[Any], bool]:
         """
         Process a conversation item of type function and generate responses.
 
@@ -961,7 +994,7 @@ class LLMExtractor:
         information_is_valid = self.__get_conversation_state_lock()
         if not information_is_valid:
             return [], [], False
-    
+
         module = importlib.import_module(item["module"])
         function = getattr(module, item["function"])
         response_text = function(self.__conversation_state, self.__softphone)
@@ -971,12 +1004,14 @@ class LLMExtractor:
         else:
             responses = [("", "function")]
             chat_messages = []
-            
+
         requires_interaction = self.__realtime
-            
+
         return responses, chat_messages, requires_interaction
-    
-    def __process_function_choice_item(self, item: Dict[str, Any]) -> Tuple[List[Tuple[str, str]], List[Any], bool]:
+
+    def __process_function_choice_item(
+        self, item: Dict[str, Any]
+    ) -> Tuple[List[Tuple[str, str]], List[Any], bool]:
         """
         Process a conversation item of type function choice and generate responses.
 
@@ -986,12 +1021,12 @@ class LLMExtractor:
         information_is_valid = self.__get_conversation_state_lock()
         if not information_is_valid:
             return [], [], False
-                
+
         module = importlib.import_module(item["module"])
         function = getattr(module, item["function"])
         choice = function(self.__conversation_state, self.__softphone)
         self.__conversation_items = self.__get_items_for_choice(choice)
-            
+
         return [], [], False
 
     def __process_conversation_items(
@@ -1017,31 +1052,51 @@ class LLMExtractor:
         while True:
             # check if conversation item needs to be repeated
             self.__check_item_repetition()
-            
+
             if self.__current_item["type"] == "read":
-                responses, chat_messages, requires_interaction = self.__process_read_item(self.__current_item)
+                responses, chat_messages, requires_interaction = (
+                    self.__process_read_item(self.__current_item)
+                )
             elif self.__current_item["type"] == "prompt":
-                responses, chat_messages, requires_interaction = self.__process_prompt_item(self.__current_item)
+                responses, chat_messages, requires_interaction = (
+                    self.__process_prompt_item(self.__current_item)
+                )
             elif self.__current_item["type"] == "path":
-                responses, chat_messages, requires_interaction = self.__process_path_item(self.__current_item)
+                responses, chat_messages, requires_interaction = (
+                    self.__process_path_item(self.__current_item)
+                )
             elif self.__current_item["type"] == "information":
-                responses, chat_messages, requires_interaction = self.__process_information_item(self.__current_item, user_input, is_recursive)
+                responses, chat_messages, requires_interaction = (
+                    self.__process_information_item(
+                        self.__current_item, user_input, is_recursive
+                    )
+                )
             elif self.__current_item["type"] == "choice":
-                responses, chat_messages, requires_interaction = self.__process_choice_item(self.__current_item, user_input, is_recursive)
+                responses, chat_messages, requires_interaction = (
+                    self.__process_choice_item(
+                        self.__current_item, user_input, is_recursive
+                    )
+                )
             elif self.__current_item["type"] == "function":
-                responses, chat_messages, requires_interaction = self.__process_function_item(self.__current_item)
+                responses, chat_messages, requires_interaction = (
+                    self.__process_function_item(self.__current_item)
+                )
             elif self.__current_item["type"] == "function_choice":
-                responses, chat_messages, requires_interaction = self.__process_function_choice_item(self.__current_item)
+                responses, chat_messages, requires_interaction = (
+                    self.__process_function_choice_item(self.__current_item)
+                )
 
             collected_responses.extend(responses)
             self.chat_history.extend(chat_messages)
-            
+
             if requires_interaction and not self.__realtime:
                 break
-                
+
             if len(self.__conversation_items) > 0:
                 # for interactive items, breakt the loop to get user input. Last item can`t be interactive.
-                if (requires_interaction and self.__realtime) or self.__current_item.get("interactive", False):
+                if (
+                    requires_interaction and self.__realtime
+                ) or self.__current_item.get("interactive", False):
                     self.__current_item = self.__conversation_items.pop(0)
                     break
                 else:

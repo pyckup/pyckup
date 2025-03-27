@@ -18,21 +18,21 @@ class call_e:
     db = None
 
     def __init__(
-        self, 
-        sip_credentials_path: str, 
-        db_path: Optional[str] = None, 
-        log_dir: Optional[str] = None, 
-        realtime: bool = True
+        self,
+        sip_credentials_path: str,
+        db_path: Optional[str] = None,
+        log_dir: Optional[str] = None,
+        realtime: bool = True,
     ) -> None:
         """
         Create an instance of the call_e class.
 
         Args:
             sip_credentials_path (str): The file path to the SIP credentials.
-            db_path (str, optional): The file path to the database (will be created if it doesn't exist). If None, database functions can't be used. Defaults to None.    
+            db_path (str, optional): The file path to the database (will be created if it doesn't exist). If None, database functions can't be used. Defaults to None.
             log_dir (str, optional): The directory where logs will be saved. If None, loggin is disabled. Defaults to None.
             realtime (bool, optional): Whether to use the OpenAI realtime API. Defaults to True.
-            """
+        """
         self.__sip_credentials_path = sip_credentials_path
         self.__setup_db(db_path)
         self.__log_dir = log_dir
@@ -68,11 +68,9 @@ class call_e:
         conversation_config = self.__read_conversation_config(config_path)
 
         conversation_title = (
-            conversation_config["conversation_title"]
-            .lower()
-            .replace(" ", "_")
+            conversation_config["conversation_title"].lower().replace(" ", "_")
         )
-            
+
         if self.db is not None:
             # ensure that results table exists
             fields = ""
@@ -103,7 +101,7 @@ class call_e:
             )
 
             self.db.commit()
-        
+
         return conversation_config, conversation_title
 
     def __setup_db(self, db_path: Optional[str]) -> None:
@@ -116,11 +114,11 @@ class call_e:
         Returns:
             None
         """
-        
+
         if db_path is None:
             self.db = None
             return
-        
+
         self.db = sqlite3.connect(db_path)
         cursor = self.db.cursor()
 
@@ -150,7 +148,7 @@ class call_e:
         if self.db is None:
             print("Cannot add contact: no database provided")
             return
-        
+
         cursor = self.db.cursor()
         cursor.execute(
             """
@@ -174,7 +172,7 @@ class call_e:
         if self.db is None:
             print("Cannot get contact: no database provided")
             return None
-        
+
         cursor = self.db.cursor()
         cursor.execute(
             """
@@ -193,7 +191,9 @@ class call_e:
             "phone_number": contact_data[2],
         }
 
-    def get_contact_status(self, contact_id: int, conversation_config_path: str) -> Optional[Dict]:
+    def get_contact_status(
+        self, contact_id: int, conversation_config_path: str
+    ) -> Optional[Dict]:
         """
         Retrieve the status of a contact for the previous calls using this conversation.
 
@@ -207,9 +207,9 @@ class call_e:
         if self.db is None:
             print("Cannot get contact status: no database provided")
             return None
-        
+
         _, conversation_title = self.setup_conversation(conversation_config_path)
-        
+
         cursor = self.db.cursor()
         cursor.execute(
             f"""
@@ -224,15 +224,15 @@ class call_e:
             return None
 
         return {"num_attempts": status_data[2], "status": status_data[3]}
-    
+
     def __call_core_routine(
-self, 
-softphone: Softphone, 
-conversation_config: Dict, 
-is_outgoing: bool, 
-enable_logging: bool = True, 
-contact_id: Optional[int] = None, 
-conversation_title: Optional[str] = None
+        self,
+        softphone: Softphone,
+        conversation_config: Dict,
+        is_outgoing: bool,
+        enable_logging: bool = True,
+        contact_id: Optional[int] = None,
+        conversation_title: Optional[str] = None,
     ) -> None:
         """
         Core routine for handling a call.
@@ -254,20 +254,25 @@ conversation_title: Optional[str] = None
 
         if enable_logging:
             log_path = setup_log(self.__log_dir, phone_number)
-        
-        
+
         if self.__realtime:
-            #REALTIME CASE
+            # REALTIME CASE
             num_logged_messages = 0
             incoming_buffer, outgoing_buffer = softphone.handle_external_buffers()
-            extractor = LLMExtractor(conversation_config, softphone=softphone, realtime=True, incoming_buffer=incoming_buffer, outgoing_buffer=outgoing_buffer)
-            
+            extractor = LLMExtractor(
+                conversation_config,
+                softphone=softphone,
+                realtime=True,
+                incoming_buffer=incoming_buffer,
+                outgoing_buffer=outgoing_buffer,
+            )
+
             while (
                 extractor.get_status() == ExtractionStatus.IN_PROGRESS
                 and softphone.has_picked_up_call()
             ):
-                extractor_responses = extractor.run_extraction_step("")  
-                
+                extractor_responses = extractor.run_extraction_step("")
+
                 # log new messages
                 if enable_logging:
                     chat_history = extractor.chat_history
@@ -277,16 +282,18 @@ conversation_title: Optional[str] = None
                         elif message.type == "human":
                             log_message(log_path, message.content, role="User")
                     num_logged_messages += len(chat_history[num_logged_messages:])
-                    
+
                 # read out responses
                 for response in extractor_responses:
                     if response[1] == "read" or response[1] == "function":
                         softphone.say(response[0], cache_audio=True)
             softphone.wait_for_external_output_finish()
-             
+
         else:
             # NOT-REALTIME CASE
-            extractor = LLMExtractor(conversation_config, softphone=softphone, realtime=False)
+            extractor = LLMExtractor(
+                conversation_config, softphone=softphone, realtime=False
+            )
             extractor_responses = extractor.run_extraction_step("")
             if enable_logging:
                 for response in extractor_responses:
@@ -301,12 +308,12 @@ conversation_title: Optional[str] = None
             ):
                 time.sleep(0.5)
                 user_input = softphone.listen()
-                
+
                 # user input is ##INTERRUPTED## if listening couldn`t be performed. Could be due to call interruption or holding the call for too long.
                 if user_input == "##INTERRUPTED##":
                     softphone.hangup()
                     print("Call interrupted during listening.")
-                        
+
                 softphone.play_audio(str(HERE / "../resources/processing.wav"))
                 if enable_logging:
                     log_message(log_path, user_input, role="User")
@@ -357,20 +364,18 @@ conversation_title: Optional[str] = None
                     )
                     self.db.commit()
 
-            
-
         # usually we would hang up here, but if the call is forwarded then should keep the connection open
         while softphone.is_forwarded():
             time.sleep(1)
         softphone.hangup()
         print("Call ended.")
-    
+
     def __perform_outgoing_call(
-self, 
-conversation_config_path: str, 
-phone_number: Optional[str] = None, 
-contact_id: Optional[int] = None, 
-enable_logging: bool = True
+        self,
+        conversation_config_path: str,
+        phone_number: Optional[str] = None,
+        contact_id: Optional[int] = None,
+        enable_logging: bool = True,
     ) -> None:
         """
         Perform an outgoing call to a specified phone number or contact ID. Wrapped by call_number and call_contact.
@@ -385,10 +390,14 @@ enable_logging: bool = True
             None
         """
         if phone_number is None and contact_id is None:
-            print("Couldn't make call: you either have to provide a phone number or a contact id.")
+            print(
+                "Couldn't make call: you either have to provide a phone number or a contact id."
+            )
             return
-                
-        conversation_config, conversation_title = self.setup_conversation(conversation_config_path)
+
+        conversation_config, conversation_title = self.setup_conversation(
+            conversation_config_path
+        )
 
         if contact_id and self.db is not None:
             contact = self.get_contact(contact_id)
@@ -397,7 +406,7 @@ enable_logging: bool = True
                 return
 
             phone_number = contact["phone_number"]
-            
+
             # ensure that contact has status entry
             cursor = self.db.cursor()
             cursor.execute(
@@ -427,11 +436,22 @@ enable_logging: bool = True
             return
 
         print("Call picked up. Setting up extractor.")
-        
-        self.__call_core_routine(sf, conversation_config, is_outgoing=True, enable_logging=enable_logging, contact_id=contact_id, conversation_title=conversation_title)
 
-        
-    def call_number(self, phone_number: str, conversation_config_path: str, enable_logging: bool = True) -> None:
+        self.__call_core_routine(
+            sf,
+            conversation_config,
+            is_outgoing=True,
+            enable_logging=enable_logging,
+            contact_id=contact_id,
+            conversation_title=conversation_title,
+        )
+
+    def call_number(
+        self,
+        phone_number: str,
+        conversation_config_path: str,
+        enable_logging: bool = True,
+    ) -> None:
         """
         Initiate a call to a phone number and lead recipient through the current outgoing conversation.
         Update contact status while doing so.
@@ -444,10 +464,18 @@ enable_logging: bool = True
         Returns:
             None
         """
-        self.__perform_outgoing_call(conversation_config_path, phone_number=phone_number, enable_logging=enable_logging)
-        
+        self.__perform_outgoing_call(
+            conversation_config_path,
+            phone_number=phone_number,
+            enable_logging=enable_logging,
+        )
 
-    def call_contact(self, contact_id: int, conversation_config_path: str, enable_logging: bool = True) -> None:
+    def call_contact(
+        self,
+        contact_id: int,
+        conversation_config_path: str,
+        enable_logging: bool = True,
+    ) -> None:
         """
         Initiate a call to a contact and lead them through the current outgoing conversation.
         Update contact status while doing so.
@@ -463,10 +491,19 @@ enable_logging: bool = True
         if self.db is None:
             print("Cannot call contact: no database provided")
             return
-        
-        self.__perform_outgoing_call(conversation_config_path, contact_id=contact_id, enable_logging=enable_logging)
-        
-    def call_numbers(self, phone_numbers: List[str], conversation_config_path: str, enable_logging: bool = True) -> None:
+
+        self.__perform_outgoing_call(
+            conversation_config_path,
+            contact_id=contact_id,
+            enable_logging=enable_logging,
+        )
+
+    def call_numbers(
+        self,
+        phone_numbers: List[str],
+        conversation_config_path: str,
+        enable_logging: bool = True,
+    ) -> None:
         """
         Call a list of phone numbers and lead them through the current outgoing conversation.
 
@@ -479,13 +516,15 @@ enable_logging: bool = True
             None
         """
         for phone_number in phone_numbers:
-            self.call_number(phone_number, conversation_config_path, enable_logging=enable_logging)
+            self.call_number(
+                phone_number, conversation_config_path, enable_logging=enable_logging
+            )
 
     def call_contacts(
-self, 
-conversation_config_path: str, 
-contact_ids: Optional[List[int]] = None, 
-maximum_attempts: Optional[int] = None
+        self,
+        conversation_config_path: str,
+        contact_ids: Optional[List[int]] = None,
+        maximum_attempts: Optional[int] = None,
     ) -> None:
         """
         Call a list of contacts according to their statuses from previous call attempts.
@@ -501,7 +540,7 @@ maximum_attempts: Optional[int] = None
         if self.db is None:
             print("Cannot call contacts: no database provided")
             return
-        
+
         if contact_ids is None:
             cursor = self.db.cursor()
             cursor.execute(
@@ -540,11 +579,11 @@ maximum_attempts: Optional[int] = None
             self.call_contact(contact_id, conversation_config_path)
 
     def __softphone_listen(
-self, 
-        sf: Softphone, 
-sf_group: SoftphoneGroup, 
-incoming_conversation_config: Dict, 
-enable_logging: bool = True
+        self,
+        sf: Softphone,
+        sf_group: SoftphoneGroup,
+        incoming_conversation_config: Dict,
+        enable_logging: bool = True,
     ) -> None:
         """
         Thread used for listening for incoming calls. A thread is created for each softphone of the group.
@@ -559,7 +598,7 @@ enable_logging: bool = True
         Returns:
             None
         """
-            
+
         # register thread
         sf_group.pjsua_endpoint.libRegisterThread(f"softphone_listen")
 
@@ -574,7 +613,12 @@ enable_logging: bool = True
 
             print(f"Incoming call on softphone {sf.get_id()}. Setting up extractor.")
 
-            self.__call_core_routine(sf, incoming_conversation_config, is_outgoing=False, enable_logging=enable_logging)
+            self.__call_core_routine(
+                sf,
+                incoming_conversation_config,
+                is_outgoing=False,
+                enable_logging=enable_logging,
+            )
         except Exception as e:
             print("Exception in listening thread:", e)
             traceback.print_exc()
@@ -586,13 +630,12 @@ enable_logging: bool = True
             args=(sf, sf_group, incoming_conversation_config, enable_logging),
         )
         listen_thread.start()
-        
 
     def start_listening(
-self, 
-conversation_config_path: str, 
-num_devices: int = 1, 
-enable_logging: bool = True
+        self,
+        conversation_config_path: str,
+        num_devices: int = 1,
+        enable_logging: bool = True,
     ) -> SoftphoneGroup:
         """
         Start listening for incoming calls.
@@ -605,7 +648,9 @@ enable_logging: bool = True
         Returns:
             SoftphoneGroup: The group of softphones that are listening for incoming calls.
         """
-        conversation_config, conversation_title = self.setup_conversation(conversation_config_path)
+        conversation_config, conversation_title = self.setup_conversation(
+            conversation_config_path
+        )
 
         sf_group = SoftphoneGroup(self.__sip_credentials_path)
         for i in range(int(num_devices)):
