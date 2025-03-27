@@ -1,4 +1,3 @@
-import base64
 import hashlib
 import io
 import json
@@ -16,6 +15,7 @@ import yaml
 import uuid
 import glob
 import traceback
+from typing import Optional, Tuple, Callable
 
 HERE = Path(os.path.abspath(__file__)).parent
 
@@ -25,7 +25,7 @@ class SoftphoneCall(pj.Call):
     softphone = None
     __is_paired = False
 
-    def __init__(self, acc, softphone, call_id=pj.PJSUA_INVALID_ID, paired=False):
+    def __init__(self, acc: pj.Account, softphone: "Softphone", call_id: int = pj.PJSUA_INVALID_ID, paired: bool = False) -> None:
         """
         Initialize a SoftphoneCall instance, inheriting PJSUA2's Call class.
 
@@ -39,7 +39,7 @@ class SoftphoneCall(pj.Call):
         self.softphone = softphone
         self.__is_paired = paired
 
-    def onCallState(self, prm):
+    def onCallState(self, prm: pj.OnCallStateParam) -> None:
         if not self.softphone:
             return
 
@@ -53,7 +53,7 @@ class SoftphoneCall(pj.Call):
 
         super(SoftphoneCall, self).onCallState(prm)
         
-    def onDtmfDigit(self, prm):
+    def onDtmfDigit(self, prm: pj.OnDtmfDigitParam) -> None:
         for reciever in self.softphone.dtmf_recievers:
             reciever(prm.digit)
 
@@ -66,11 +66,11 @@ class GroupAccount(pj.Account):
         group (SoftphoneGroup): The softphone group associated with this account.
     """
 
-    def __init__(self, group):
+    def __init__(self, group: "SoftphoneGroup") -> None:
         self.__group = group
         super(GroupAccount, self).__init__()
 
-    def onIncomingCall(self, prm):
+    def onIncomingCall(self, prm: pj.OnIncomingCallParam) -> None:
         # try to answer call using one of the available group softphones
         for phone in self.__group.softphones:
             if phone.active_call:
@@ -105,7 +105,7 @@ class Softphone:
 
     __openai_client = None
 
-    def __init__(self, credentials_path, group=None):
+    def __init__(self, credentials_path: str, group: Optional["SoftphoneGroup"] = None) -> None:
         """
         Initialize a Softphone instance with the provided SIP credentials and softphone group. Used to make
         and answer calls and perform various call actions (e.g. hangup, forward, say, play_audio, listen).
@@ -156,7 +156,7 @@ class Softphone:
         if not os.path.exists(HERE / "../artifacts"):
             os.makedirs(HERE / "../artifacts")
 
-    def __del__(self):
+    def __del__(self) -> None:
         self.__media_player_1 = None
         self.__media_player_2 = None
         self.__media_recorder = None
@@ -168,7 +168,7 @@ class Softphone:
         
         self.__group.remove_phone(self)
         
-    def get_id(self):
+    def get_id(self) -> str:
         """
         Get the unique ID of the softphone instance.
         
@@ -177,7 +177,7 @@ class Softphone:
         """
         return self.__id
 
-    def __remove_artifacts(self):
+    def __remove_artifacts(self) -> None:
         """
         Remove artifacts (mostly incoming and outgoing audio files) associated with the current softphone instance.
 
@@ -198,7 +198,7 @@ class Softphone:
                         f"An error occurred while trying to delete the file {artifact}: {e}"
                     )
                     
-    def __external_incoming_buffer_loop(self):
+    def __external_incoming_buffer_loop(self) -> None:
         """
         Playback audio incoming from external source (eg. OpenAI realtime API), stored in external incoming buffer.
         Assumes chunks of raw PCM audio with sample rate 24000, 16 bit, mono.
@@ -264,7 +264,7 @@ class Softphone:
             traceback.print_exc()
             return
     
-    def __external_outgoing_buffer_loop(self):
+    def __external_outgoing_buffer_loop(self) -> None:
         """
         Record audio to be sent to external source (eg. OpenAI realtime API) and store it in external outgoing buffer.
         Assumes chunks of raw PCM audio with sample rate 24000, 16 bit, mono.
@@ -300,7 +300,7 @@ class Softphone:
             # self.__group.pjsua_endpoint.libStopWorkerThreads()
             return
             
-    def handle_external_buffers(self):
+    def handle_external_buffers(self) -> Tuple[queue.Queue, queue.Queue]:
         """
         Start handling the external incoming and outgoing audio buffers in separate threads.
         
@@ -315,7 +315,7 @@ class Softphone:
         
         return self.__external_incoming_buffer, self.__external_outgoing_buffer
     
-    def wait_for_external_output_finish(self):
+    def wait_for_external_output_finish(self) -> None:
         """
         Wait until no audio is being output to external sources.
         
@@ -328,7 +328,7 @@ class Softphone:
         self.__audio_output_lock.acquire()
         self.__audio_output_lock.release()
 
-    def call(self, phone_number):
+    def call(self, phone_number: str) -> None:
         """
         Initiate a call to the specified phone number.
 
@@ -350,7 +350,7 @@ class Softphone:
         call_op_param = pj.CallOpParam(True)
         self.active_call.makeCall(sip_adress, call_op_param)
 
-    def forward_call(self, phone_number, timeout=None):
+    def forward_call(self, phone_number: str, timeout: Optional[float] = None) -> bool:
         """
         Attempt to forward the current call to a specified phone number. A seperate call will be made and the
         two calls will be connected.
@@ -425,10 +425,10 @@ class Softphone:
 
         return True
 
-    def is_forwarded(self):
+    def is_forwarded(self) -> bool:
         return self.__paired_call is not None
 
-    def __has_picked_up_call(self, call_type="active"):
+    def __has_picked_up_call(self, call_type: str = "active") -> bool:
         """
         Check if the specified call (active call or paired call) has been picked up.
 
@@ -454,7 +454,7 @@ class Softphone:
                     return True
         return False
 
-    def has_picked_up_call(self):
+    def has_picked_up_call(self) -> bool:
         """
         Check if the active call has been picked up.
 
@@ -463,7 +463,7 @@ class Softphone:
         """
         return self.__has_picked_up_call("active")
     
-    def has_paired_call(self):
+    def has_paired_call(self) -> bool:
         """
         Check if the paired call has been picked up.
 
@@ -472,7 +472,7 @@ class Softphone:
         """
         return self.__has_picked_up_call("paired")
     
-    def get_called_phone_number(self):
+    def get_called_phone_number(self) -> Optional[str]:
         """
         Get the phone number of the active call.
 
@@ -486,7 +486,7 @@ class Softphone:
         return self.active_call.getInfo().remoteUri.split("@")[0].split(":")[1]
 
 
-    def __wait_for_stop_calling(self, call_type="active", timeout=None):
+    def __wait_for_stop_calling(self, call_type: str = "active", timeout: Optional[float] = None) -> None:
         """
         Wait for the specified call (active call or paired call) to stop ringing. Holds program execution.
 
@@ -523,7 +523,7 @@ class Softphone:
             except Exception as e:
                 return
 
-    def wait_for_stop_calling(self, timeout=None):
+    def wait_for_stop_calling(self, timeout: Optional[float] = None) -> None:
         """
         Wait for the active call to stop ringing. Holds program execution.
         
@@ -535,7 +535,7 @@ class Softphone:
         """
         self.__wait_for_stop_calling("active", timeout)
 
-    def hangup(self, paired_only=False):
+    def hangup(self, paired_only: bool = False) -> None:
         """
         Hang up the current call(s) and clean up artifacts.
 
@@ -568,7 +568,7 @@ class Softphone:
 
         self.__remove_artifacts()
         
-    def __get_message_hash(self, message):
+    def __get_message_hash(self, message: str) -> str:
         """
         Calculate the hash of a given string message using SHA-256.
 
@@ -582,7 +582,7 @@ class Softphone:
         sha256_generator.update(message.encode('utf-8'))
         return sha256_generator.hexdigest()
 
-    def say(self, message, cache_audio=False):
+    def say(self, message: str, cache_audio: bool = False) -> None:
         """
         Read out a message as audio to the active call.
 
@@ -806,7 +806,7 @@ class Softphone:
                 return
         print("No available audio media")
 
-    def play_audio(self, audio_file_path, do_loop=False):
+    def play_audio(self, audio_file_path: str, do_loop: bool = False) -> None:
         """
         Play an audio file to the active call.
 
@@ -842,7 +842,7 @@ class Softphone:
             self.__media_player_1.createPlayer(audio_file_path, loop_mode)
             self.__media_player_1.startTransmit(call_media)
 
-    def listen(self):
+    def listen(self) -> str:
         """
         Listen for incoming audio on the incoming call and transcribe it to text. Listens as long
         as a certain decibel level is maintained.
@@ -878,7 +878,7 @@ class Softphone:
         )
         return transcription.text
 
-    def __record_incoming_audio(self, duration=1.0, unavailable_media_timeout=60):
+    def __record_incoming_audio(self, duration: float = 1.0, unavailable_media_timeout: int = 60) -> bool:
         """
         Record incoming audio from the active call for a specified duration and save it as an artifact WAVE file.
 
@@ -930,7 +930,7 @@ class Softphone:
         
         return False
     
-    def __skip_silence(self):
+    def __skip_silence(self) -> bool:
         """
         Wait until incoming audio stream is no longer silent.
 
@@ -958,7 +958,7 @@ class Softphone:
         
         return True
             
-    def __record_while_not_silent(self):
+    def __record_while_not_silent(self) -> Tuple[bool, Optional[AudioSegment]]:
         """
         Record incoming audio while over silence threshold.
 
@@ -993,7 +993,7 @@ class Softphone:
                     
         return True, combined_segments
     
-    def prioritize_external_audio(self):
+    def prioritize_external_audio(self) -> None:
         """
         Prioritize the playback of external audio over internal audio for the next external message.
 
@@ -1002,7 +1002,7 @@ class Softphone:
         """
         self.__prioritize_external_audio = True
         
-    def add_dtmf_reciever(self, reciever_function):
+    def add_dtmf_reciever(self, reciever_function: Callable[[str], None]) -> None:
         """
         Subscribe a function to recieve DTMF signals from the active call.
         
@@ -1011,7 +1011,7 @@ class Softphone:
         """
         self.dtmf_recievers.append(reciever_function)
 
-    def remove_dtmf_reciever(self, reciever_function):
+    def remove_dtmf_reciever(self, reciever_function: Callable[[str], None]) -> None:
         """
         Unsubscribe a function from recieving DTMF signals from the active call.
         
@@ -1029,7 +1029,7 @@ class SoftphoneGroup:
 
     is_listening = False
 
-    def __init__(self, credentials_path):
+    def __init__(self, credentials_path: str) -> None:
         """
         Initialize a SoftphoneGroup instance with the provided SIP credentials. Used to share a single
         PJSUA2 library instance and SIP account among multiple softphones.
@@ -1094,7 +1094,7 @@ class SoftphoneGroup:
 
         self.is_listening = True
 
-    def add_phone(self, phone):
+    def add_phone(self, phone: Softphone) -> None:
         """
         Add a softphone instance to this softphone group.
 
@@ -1106,7 +1106,7 @@ class SoftphoneGroup:
         """
         self.softphones.append(phone)
 
-    def remove_phone(self, phone):
+    def remove_phone(self, phone: Softphone) -> None:
         """
         Remove a softphone instance from this softphone group.
 
@@ -1120,5 +1120,5 @@ class SoftphoneGroup:
         if len(self.softphones) == 0:
             self.pjsua_account.shutdown()
             self.pjsua_endpoint.libDestroy()
-            
-    
+
+

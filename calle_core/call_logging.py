@@ -1,16 +1,15 @@
-
 import hashlib
 import os
 from pathlib import Path
 import time
+from typing import Union
 
-
-def setup_log(log_dir, phone_number):
+def setup_log(log_dir: Union[str, Path], phone_number: str) -> Path:
     """
     Creates a log file unique to the call.
 
     Args:
-        log_dir (str): The directory where the log file will be created.
+        log_dir (str | Path): The directory where the log file will be created.
         phone_number (str): The phone number of the caller.
 
     Returns:
@@ -31,7 +30,7 @@ def setup_log(log_dir, phone_number):
         
     return log_path
 
-def log_message(log_path, message, role="User"):
+def log_message(log_path: Path, message: str, role: str = "User") -> None:
     """
     Appends a message to a call's log.
 
@@ -47,4 +46,3 @@ def log_message(log_path, message, role="User"):
 
     with open(log_path, "a") as log_file:
         log_file.write(f"[{timestamp}] {role}: {message}\n")
-   

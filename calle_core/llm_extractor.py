@@ -15,6 +15,8 @@ from enum import Enum
 import threading
 import importlib
 import websocket
+from typing import Any, Dict, List, Optional, Tuple, Union
+from queue import Queue
 
 
 HERE = Path(os.path.abspath(__file__)).parent
@@ -36,7 +38,15 @@ class LLMExtractor:
     
     """
 
-    def __init__(self, conversation_config, llm_provider="openai", softphone=None, realtime=True, incoming_buffer=None, outgoing_buffer=None):
+    def __init__(
+        self,
+        conversation_config: Dict[str, Any],
+        llm_provider: str = "openai",
+        softphone: Optional[Any] = None,
+        realtime: bool = True,
+        incoming_buffer: Optional[Queue] = None,
+        outgoing_buffer: Optional[Queue] = None,
+    ) -> None:
         if llm_provider == "openai":
             self.__llm = ChatOpenAI(
                 api_key=os.environ["OPENAI_API_KEY"], model="gpt-4-turbo-preview"
@@ -103,7 +113,7 @@ class LLMExtractor:
             self.__webclient_thread.start()
             self.__outgoing_buffer_thread.start()
     
-    def __del__(self):
+    def __del__(self) -> None:
         self.__softphone.remove_dtmf_reciever(self.__check_dialled_choice)
         
         if self.__realtime_connection:
@@ -111,7 +121,7 @@ class LLMExtractor:
             self.__webclient_thread.join()
             self.__outgoing_buffer_thread.join()
         
-    def __run_realtime_client(self):
+    def __run_realtime_client(self) -> None:
         """
     Establish and manage a real-time WebSocket connection with the OpenAI API.
     
@@ -184,7 +194,7 @@ class LLMExtractor:
         self.__realtime_connection.on_open = on_open
         self.__realtime_connection.run_forever()
     
-    def __send_outgoing_buffer(self):
+    def __send_outgoing_buffer(self) -> None:
         """
         Send outgoing audio buffer encoded as base64 to the OpenAI realtime API.
 
@@ -230,7 +240,7 @@ class LLMExtractor:
             }
             self.__realtime_connection.send(json.dumps(response_event))
 
-    def __load_conversation_path(self, conversation_path):
+    def __load_conversation_path(self, conversation_path: str) -> None:
         """
         Load items from the specified conversation path into the current conversation.
 
@@ -245,7 +255,7 @@ class LLMExtractor:
         ]
         self.__current_item = self.__conversation_items.pop(0)
 
-    def __verify_information(self, data):
+    def __verify_information(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Verify if the last user message contains the required information and store the
         result in the 'information_verification_status' key of the provided data dictionary.
@@ -284,7 +294,7 @@ class LLMExtractor:
         data["information_verification_status"] = information_verification_status
         return data
 
-    def __verify_choice(self, data):
+    def __verify_choice(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Verify if the last user message contains a valid choice and store it in the
         'choice' key of the provided data dictionary.
@@ -330,7 +340,7 @@ class LLMExtractor:
         return data
     
 
-    def __filter_information(self, data):
+    def __filter_information(self, data: Dict[str, Any]) -> Optional[str]:
         """
         Filter out a specific piece of information from the last user message, abiding to the given format.
 
@@ -363,7 +373,7 @@ class LLMExtractor:
 
         return filtered_information if filtered_information != "##FAILED##" else None
 
-    def __make_information_extractor(self, data):
+    def __make_information_extractor(self, data: Dict[str, Any]) -> Any:
         """
         Create an langchain subchain to retrieve specific information from the user, in a conversational manner.
 
@@ -395,7 +405,7 @@ class LLMExtractor:
         information_extractor = extraction_prompt | self.__llm | StrOutputParser()
         return information_extractor
 
-    def __make_choice_extractor(self, data):
+    def __make_choice_extractor(self, data: Dict[str, Any]) -> Any:
         """
         Create an langchain subchain to get a choice selection from the user, in a conversational manner.
 
@@ -429,7 +439,7 @@ class LLMExtractor:
         choice_extractor = extraction_prompt | self.__llm | StrOutputParser()
         return choice_extractor
 
-    def __append_filtered_info(self, data, information_item):
+    def __append_filtered_info(self, data: Dict[str, Any], information_item: Dict[str, Any]) -> None:
         """
         Append filtered information thread-safely to the extracted information dictionary.
 
@@ -451,7 +461,7 @@ class LLMExtractor:
             
         self.__conversation_state_lock.release()
 
-    def __information_extraction_successful(self, data):
+    def __information_extraction_successful(self, data: Dict[str, Any]) -> str:
         """
         Handle the successful extraction of information, proceed with the conversation or end it.
 
@@ -475,7 +485,7 @@ class LLMExtractor:
 
         return self.__process_conversation_items(data["input"], is_recursive=True)
     
-    def __get_items_for_choice(self, choice):
+    def __get_items_for_choice(self, choice: str) -> List[Dict[str, Any]]:
         """
         Get the conversation items for a given choice of the current choice item.
 
@@ -490,7 +500,7 @@ class LLMExtractor:
         
         return [option for option in self.__current_item["options"] if option['option'] == choice][0]['items']
     
-    def __get_all_options(self):
+    def __get_all_options(self) -> List[str]:
         """
         Get all possible options for the current choice item.
 
@@ -502,7 +512,7 @@ class LLMExtractor:
         
         return [option['option'] for option in self.__current_item["options"]]
 
-    def __choice_extraction_successful(self, data):
+    def __choice_extraction_successful(self, data: Dict[str, Any]) -> str:
         """
         Handle the successful extraction of a choice and update the conversation flow accordingly.
 
@@ -517,7 +527,7 @@ class LLMExtractor:
         self.__current_item = self.__conversation_items.pop(0)
         return self.__process_conversation_items(data["input"], is_recursive=True)
 
-    def __extraction_aborted(self, data):
+    def __extraction_aborted(self, data: Dict[str, Any]) -> Union[str, None]:
         """
         Handle the scenario where information extraction is aborted by loading the "aborted" conversation path.
 
@@ -545,7 +555,7 @@ class LLMExtractor:
             data["input"], is_recursive=True, aborted=True
         )
 
-    def __execute_prompt(self, prompt):
+    def __execute_prompt(self, prompt: str) -> str:
         """
         Execute a LLM chat prompt.
 
@@ -564,7 +574,7 @@ class LLMExtractor:
         prompt_chain = prompt_template | self.__llm | StrOutputParser()
         return prompt_chain.invoke({"chat_history": self.chat_history})
     
-    def __check_item_repetition(self):
+    def __check_item_repetition(self) -> None:
         """
         Check if an item needs to be repeated and insert it at the beginning of the conversation queue.
 
@@ -585,7 +595,7 @@ class LLMExtractor:
         self.__current_item = repeat_prompt_item
         self.__repeat_item = None
     
-    def __get_conversation_state_lock(self):
+    def __get_conversation_state_lock(self) -> bool:
         """
         Acquire and release the conversation state lock.
 
@@ -596,7 +606,7 @@ class LLMExtractor:
         self.__conversation_state_lock.release()
         return not self.__repeat_item
     
-    def __check_dialled_choice(self, dialled_number):
+    def __check_dialled_choice(self, dialled_number: str) -> None:
         """
         Check if the dialled number matches any of the options in the current choice item and update the dialled choice accordingly.
 
@@ -615,7 +625,7 @@ class LLMExtractor:
                 self.__current_item_in_progress = False
                 return
     
-    def __wait_for_model_callback(self):
+    def __wait_for_model_callback(self) -> Tuple[Optional[Dict[str, Any]], Optional[List[Any]]]:
         """
         Wait for a functions callback from the realtime API.
 
@@ -656,7 +666,7 @@ class LLMExtractor:
         return args, chat_messages
         
     
-    def __process_read_item(self, item):
+    def __process_read_item(self, item: Dict[str, Any]) -> Tuple[List[Tuple[str, str]], List[Any], bool]:
         """
         Process a conversation item of type read and generate responses.
 
@@ -670,7 +680,7 @@ class LLMExtractor:
 
         return responses, chat_messages, requires_interaction
     
-    def __process_prompt_item(self, item):
+    def __process_prompt_item(self, item: Dict[str, Any]) -> Tuple[List[Tuple[str, str]], List[Any], bool]:
         """
         Process a conversation item of type prompt and generate responses.
 
@@ -724,7 +734,7 @@ class LLMExtractor:
             
         return responses, chat_messages, False
     
-    def __process_path_item(self, item):
+    def __process_path_item(self, item: Dict[str, Any]) -> Tuple[List[Tuple[str, str]], List[Any], bool]:
         """
         Process a conversation item of type path and generate responses.
 
@@ -737,7 +747,9 @@ class LLMExtractor:
             
         return [], [], False
 
-    def __process_information_item(self, item, user_input, is_recursive):
+    def __process_information_item(
+        self, item: Dict[str, Any], user_input: str, is_recursive: bool
+    ) -> Tuple[List[Tuple[str, str]], List[Any], bool]:
         """
         Process a conversation item of type information and generate responses.
 
@@ -836,7 +848,9 @@ class LLMExtractor:
             
         return responses, chat_messages, requires_interaction
     
-    def __process_choice_item(self, item, user_input, is_recursive):
+    def __process_choice_item(
+        self, item: Dict[str, Any], user_input: str, is_recursive: bool
+    ) -> Tuple[List[Tuple[str, str]], List[Any], bool]:
         """
         Process a conversation item of type choice and generate responses.
 
@@ -937,7 +951,7 @@ class LLMExtractor:
             
         return responses, chat_messages, requires_interaction
     
-    def __process_function_item(self, item):
+    def __process_function_item(self, item: Dict[str, Any]) -> Tuple[List[Tuple[str, str]], List[Any], bool]:
         """
         Process a conversation item of type function and generate responses.
 
@@ -962,7 +976,7 @@ class LLMExtractor:
             
         return responses, chat_messages, requires_interaction
     
-    def __process_function_choice_item(self, item):
+    def __process_function_choice_item(self, item: Dict[str, Any]) -> Tuple[List[Tuple[str, str]], List[Any], bool]:
         """
         Process a conversation item of type function choice and generate responses.
 
@@ -981,8 +995,8 @@ class LLMExtractor:
         return [], [], False
 
     def __process_conversation_items(
-        self, user_input, is_recursive=False, aborted=False
-    ):
+        self, user_input: str, is_recursive: bool = False, aborted: bool = False
+    ) -> List[Tuple[str, str]]:
         """
         Process items of the current conversation sequentially based on their type and update the conversation flow.
 
@@ -1039,7 +1053,7 @@ class LLMExtractor:
 
         return collected_responses
 
-    def run_extraction_step(self, user_input):
+    def run_extraction_step(self, user_input: str) -> List[Tuple[str, str]]:
         """
         Run a single step of the information extraction process.
 
@@ -1053,7 +1067,7 @@ class LLMExtractor:
             user_input, is_recursive=False, aborted=False
         )
 
-    def get_conversation_state(self):
+    def get_conversation_state(self) -> Dict[str, Any]:
         """
         Thread-safely etrieve the information extracted during the conversation so far.
 
@@ -1064,7 +1078,7 @@ class LLMExtractor:
         self.__conversation_state_lock.release()
         return self.__conversation_state
 
-    def get_status(self):
+    def get_status(self) -> Any:
         return self.status
 
 

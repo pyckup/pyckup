@@ -1,4 +1,3 @@
-from multiprocessing import Process
 import os
 from pathlib import Path
 import traceback
@@ -9,6 +8,7 @@ from calle_core.softphone import Softphone, SoftphoneGroup
 import sqlite3
 import threading
 import time
+from typing import Optional, Tuple, Dict, List
 
 HERE = Path(os.path.abspath(__file__)).parent
 
@@ -18,8 +18,12 @@ class call_e:
     db = None
 
     def __init__(
-        self, sip_credentials_path, db_path=None, log_dir=None, realtime=True
-    ):
+        self, 
+        sip_credentials_path: str, 
+        db_path: Optional[str] = None, 
+        log_dir: Optional[str] = None, 
+        realtime: bool = True
+    ) -> None:
         """
         Create an instance of the call_e class.
 
@@ -34,11 +38,11 @@ class call_e:
         self.__log_dir = log_dir
         self.__realtime = realtime
 
-    def __del__(self):
+    def __del__(self) -> None:
         if self.db is not None:
             self.db.close()
 
-    def __read_conversation_config(self, config_path):
+    def __read_conversation_config(self, config_path: str) -> Dict:
         """
         Read the conversation configuration from a YAML file.
 
@@ -46,12 +50,12 @@ class call_e:
             config_path (str): The file path to the conversation configuration YAML file.
 
         Returns:
-            dict: The parsed conversation configuration.
+            Dict: The parsed conversation configuration.
         """
         with open(config_path, "r") as config_file:
             return yaml.safe_load(config_file)
 
-    def setup_conversation(self, config_path):
+    def setup_conversation(self, config_path: str) -> Tuple[Dict, str]:
         """
         Get conversation config and title and, if database functionality is used, ensure tables exist.
 
@@ -59,7 +63,7 @@ class call_e:
             config_path (str): The file path to the outgoing conversation configuration YAML file.
 
         Returns:
-            tuple: A tuple containing the conversation configuration dictionary and the conversation title string.
+            Tuple[Dict, str]: A tuple containing the conversation configuration dictionary and the conversation title string.
         """
         conversation_config = self.__read_conversation_config(config_path)
 
@@ -102,7 +106,7 @@ class call_e:
         
         return conversation_config, conversation_title
 
-    def __setup_db(self, db_path):
+    def __setup_db(self, db_path: Optional[str]) -> None:
         """
         Ensure that the database and the contacts table exists.
 
@@ -132,7 +136,7 @@ class call_e:
         )
         self.db.commit()
 
-    def add_contact(self, name, phone_number):
+    def add_contact(self, name: str, phone_number: str) -> None:
         """
         Add a new contact to the database.
 
@@ -157,7 +161,7 @@ class call_e:
 
         self.db.commit()
 
-    def get_contact(self, contact_id):
+    def get_contact(self, contact_id: int) -> Optional[Dict]:
         """
         Retrieve contact information from the database by contact ID.
 
@@ -165,7 +169,7 @@ class call_e:
             contact_id (int): The ID of the contact to retrieve.
 
         Returns:
-            dict or None: A dictionary with the contact's information if found, otherwise None.
+            Optional[Dict]: A dictionary with the contact's information if found, otherwise None.
         """
         if self.db is None:
             print("Cannot get contact: no database provided")
@@ -189,17 +193,16 @@ class call_e:
             "phone_number": contact_data[2],
         }
 
-    def get_contact_status(self, contact_id, conversation_config_path):
+    def get_contact_status(self, contact_id: int, conversation_config_path: str) -> Optional[Dict]:
         """
         Retrieve the status of a contact for the previous calls using this conversation.
 
         Args:
             contact_id (int): The ID of the contact whose status is to be retrieved.
-            conversation_title (str): The path to the config file for which the status should be retrieved.
-
+            conversation_config_path (str): The path to the config file for which the status should be retrieved.
 
         Returns:
-            dict or None: A dictionary with the contact's status information if found, otherwise None.
+            Optional[Dict]: A dictionary with the contact's status information if found, otherwise None.
         """
         if self.db is None:
             print("Cannot get contact status: no database provided")
@@ -222,7 +225,15 @@ class call_e:
 
         return {"num_attempts": status_data[2], "status": status_data[3]}
     
-    def __call_core_routine(self, softphone, conversation_config, is_outgoing, enable_logging=True, contact_id=None, conversation_title=None):
+    def __call_core_routine(
+self, 
+softphone: Softphone, 
+conversation_config: Dict, 
+is_outgoing: bool, 
+enable_logging: bool = True, 
+contact_id: Optional[int] = None, 
+conversation_title: Optional[str] = None
+    ) -> None:
         """
         Core routine for handling a call.
 
@@ -354,7 +365,13 @@ class call_e:
         softphone.hangup()
         print("Call ended.")
     
-    def __perform_outgoing_call(self, conversation_config_path, phone_number=None, contact_id=None, enable_logging=True):
+    def __perform_outgoing_call(
+self, 
+conversation_config_path: str, 
+phone_number: Optional[str] = None, 
+contact_id: Optional[int] = None, 
+enable_logging: bool = True
+    ) -> None:
         """
         Perform an outgoing call to a specified phone number or contact ID. Wrapped by call_number and call_contact.
 
@@ -414,7 +431,7 @@ class call_e:
         self.__call_core_routine(sf, conversation_config, is_outgoing=True, enable_logging=enable_logging, contact_id=contact_id, conversation_title=conversation_title)
 
         
-    def call_number(self, phone_number, conversation_config_path, enable_logging=True):
+    def call_number(self, phone_number: str, conversation_config_path: str, enable_logging: bool = True) -> None:
         """
         Initiate a call to a phone number and lead recipient through the current outgoing conversation.
         Update contact status while doing so.
@@ -430,7 +447,7 @@ class call_e:
         self.__perform_outgoing_call(conversation_config_path, phone_number=phone_number, enable_logging=enable_logging)
         
 
-    def call_contact(self, contact_id, conversation_config_path, enable_logging=True):
+    def call_contact(self, contact_id: int, conversation_config_path: str, enable_logging: bool = True) -> None:
         """
         Initiate a call to a contact and lead them through the current outgoing conversation.
         Update contact status while doing so.
@@ -449,7 +466,7 @@ class call_e:
         
         self.__perform_outgoing_call(conversation_config_path, contact_id=contact_id, enable_logging=enable_logging)
         
-    def call_numbers(self, phone_numbers, conversation_config_path, enable_logging=True):
+    def call_numbers(self, phone_numbers: List[str], conversation_config_path: str, enable_logging: bool = True) -> None:
         """
         Call a list of phone numbers and lead them through the current outgoing conversation.
 
@@ -464,7 +481,12 @@ class call_e:
         for phone_number in phone_numbers:
             self.call_number(phone_number, conversation_config_path, enable_logging=enable_logging)
 
-    def call_contacts(self, conversation_config_path, contact_ids=None, maximum_attempts=None):
+    def call_contacts(
+self, 
+conversation_config_path: str, 
+contact_ids: Optional[List[int]] = None, 
+maximum_attempts: Optional[int] = None
+    ) -> None:
         """
         Call a list of contacts according to their statuses from previous call attempts.
 
@@ -517,7 +539,13 @@ class call_e:
 
             self.call_contact(contact_id, conversation_config_path)
 
-    def __softphone_listen(self, sf, sf_group, incoming_conversation_config, enable_logging=True):
+    def __softphone_listen(
+self, 
+        sf: Softphone, 
+sf_group: SoftphoneGroup, 
+incoming_conversation_config: Dict, 
+enable_logging: bool = True
+    ) -> None:
         """
         Thread used for listening for incoming calls. A thread is created for each softphone of the group.
         After connection is made, call is handled according to the incoming conversation configuration.
@@ -560,7 +588,12 @@ class call_e:
         listen_thread.start()
         
 
-    def start_listening(self, conversation_config_path, num_devices=1, enable_logging=True):
+    def start_listening(
+self, 
+conversation_config_path: str, 
+num_devices: int = 1, 
+enable_logging: bool = True
+    ) -> SoftphoneGroup:
         """
         Start listening for incoming calls.
 
@@ -584,7 +617,7 @@ class call_e:
             listen_thread.start()
         return sf_group
 
-    def stop_listening(self, sf_group):
+    def stop_listening(self, sf_group: SoftphoneGroup) -> None:
         """
         Stop listening for incoming calls on the specified softphone group.
 
