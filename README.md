@@ -1,7 +1,8 @@
 ## About
 Python package used to make and recieve calls and have them conducted by AI. 
+Can be used to build all kinds of realtime applications that work over the telephone network, including ones with complex conversational flows.
+Conversations can be defined by providing a YAML conversation configuration file. See annotated example in samples/sample_conversation_config.yaml.
 Calls are made via a SIP softphone using the PJSUA2 library. LLM and TTS/STT services accessed through OpenAI API. 
-Conversations can be defined by providing a predetermined structure in the format of a conversation config.
 
 ## Setup
 1. Install package 
@@ -37,3 +38,6 @@ Conversations can be defined by providing a predetermined structure in the forma
     # calls can be recieved during this time
     input()
     calle.stop_listening(grp)
+
+## Contributing
+For information on how to contribute to the repository, see [the contribution guide](CONTRIBUTING.md)

@@ -2,6 +2,6 @@ from setuptools import setup, find_packages
 
 setup(
     name="calle",
-    version="0.13",
+    version="1.0",
     packages=find_packages(),
 )
