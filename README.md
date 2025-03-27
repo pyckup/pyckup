@@ -16,7 +16,7 @@ Calls are made via a SIP softphone using the PJSUA2 library. LLM and TTS/STT ser
 
     from call_e import call_e
 
-    calle = call_e("samples/sample_credentials.json", "your_database_path.db")
+    calle = call_e("samples/sample_credentials.json")
 
     # Call a single phone number
     calle.call_number("+4912345678", "../samples/sample_conversation_config.yaml")
