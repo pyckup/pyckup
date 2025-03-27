@@ -38,3 +38,6 @@ Calls are made via a SIP softphone using the PJSUA2 library. LLM and TTS/STT ser
     # calls can be recieved during this time
     input()
     calle.stop_listening(grp)
+
+## Contributing
+For information on how to contribute to the repository, see [the contribution guide](CONTRIBUTING.md)
