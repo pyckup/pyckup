@@ -566,16 +566,16 @@ class LLMExtractor:
 
         self.status = ExtractionStatus.ABORTED
 
-        self.__conversation_items = self.__conversation_config["conversation_paths"][
+        self.__conversation_items = copy.deepcopy(self.__conversation_config["conversation_paths"][
             "aborted"
-        ]
+        ])
         if len(self.__conversation_items) > 0:
             self.__current_item = self.__conversation_items.pop(0)
         else:
             return ""
 
         if self.__realtime:
-            return
+            data["input"] = ""
 
         return self.__process_conversation_items(
             data["input"], is_recursive=True, aborted=True
@@ -774,9 +774,9 @@ class LLMExtractor:
         Returns:
             tuple: A tuple containing the responses (list), chat messages (list), and a boolean indicating if interaction is required (bool).
         """
-        self.__conversation_items = self.__conversation_config["conversation_paths"][
+        self.__conversation_items = copy.deepcopy(self.__conversation_config["conversation_paths"][
             item["path"]
-        ]
+        ])
 
         return [], [], False
 
@@ -799,7 +799,7 @@ class LLMExtractor:
                         {
                             "type": "function",
                             "name": "information_callback",
-                            "description": f"Call this function once you have sucessfully extracted the information from the user. Provide as a parameter the extracted information. The parameter should be in the following format: {item['format']}. If the user seems uncomfortable or doesn't want to answer, output ##ABORT## as parameter.",
+                            "description": f"Call this function once you have sucessfully extracted the information from the user. Provide as a parameter the extracted information. The parameter should be in the following format: {item['format']}. If the user seems doesn't want to answer or wants to quit the conversation, output ##ABORT## as parameter.",
                             "parameters": {
                                 "type": "object",
                                 "properties": {"information": {"type": "string"}},
@@ -896,7 +896,7 @@ class LLMExtractor:
                         {
                             "type": "function",
                             "name": "choice_callback",
-                            "description": f"Call this function once you have sucessfully extracted the selected choice, which should be only one of the following: {self.__get_all_options()}. If the user seems uncomfortable or doesn't want to answer, output ##ABORT## as parameter.",
+                            "description": f"Call this function once you have sucessfully extracted the selected choice, which should be only one of the following: {self.__get_all_options()}. If the user seems doesn't want to answer or wants to quit the conversation, output ##ABORT## as parameter.",
                             "parameters": {
                                 "type": "object",
                                 "properties": {"choice": {"type": "string"}},

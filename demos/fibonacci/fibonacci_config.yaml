@@ -1,0 +1,42 @@
+conversation_title: Fibonacci Demo
+conversation_paths:
+  entry: 
+    - type: read 
+      text: Hi, you are talking to Call-E. What can I do for you?
+    - type: path
+      path: main
+  main: # main interaction loop
+    - type: choice 
+      choice: What can I do for you?
+      silent: True
+      options:
+        - option: Read Fibonacci numbers
+          dial_number: 1
+          items:
+            - type: information
+              title: num_fibonacci
+              description: How many fibonacci numbers should be read? 
+              format: The number of fibonacci numbers as an integer, e.g. 5 or 148.
+            - type: prompt 
+              prompt: Say that you will read the specified number of fibonacci numbers. Don't actually read the numbers!
+            - type: function 
+              module: demos.fibonacci.fibonacci_trunks
+              function: read_fibonacci
+            - type: path
+              path: main 
+        - option: Play some music
+          dial_number: 2
+          items:
+            - type: function 
+              module: demos.fibonacci.fibonacci_trunks
+              function: play_music
+            - type: read
+              text: I hope you enjoyed the music!
+            - type: path
+              path: main
+  aborted:
+    - type: prompt
+      prompt: Briefly wrap up the conversation.
+
+  
+

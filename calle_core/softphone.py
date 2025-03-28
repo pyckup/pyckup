@@ -870,6 +870,28 @@ class Softphone:
             print("Can't play audio: Call is in forwarding session.")
             return
 
+        self.stop_audio()
+        
+        call_info = self.active_call.getInfo()
+        for i in range(len(call_info.media)):
+            if (
+                call_info.media[i].type == pj.PJMEDIA_TYPE_AUDIO
+                and call_info.media[i].status == pj.PJSUA_CALL_MEDIA_ACTIVE
+            ):
+                call_media = self.active_call.getAudioMedia(i)
+
+            self.__media_player_1 = pj.AudioMediaPlayer()
+            loop_mode = pj.PJMEDIA_FILE_LOOP if do_loop else pj.PJMEDIA_FILE_NO_LOOP
+            self.__media_player_1.createPlayer(audio_file_path)
+            self.__media_player_1.startTransmit(call_media)
+            
+    def stop_audio(self) -> None:
+        """
+        Stop playing audio to the active call.
+
+        Returns:
+            None
+        """
         call_info = self.active_call.getInfo()
         for i in range(len(call_info.media)):
             if (
@@ -880,13 +902,11 @@ class Softphone:
 
             if self.__media_player_1:
                 self.__media_player_1.stopTransmit(call_media)
+                del self.__media_player_1
             if self.__media_player_2:
                 self.__media_player_2.stopTransmit(call_media)
-
-            self.__media_player_1 = pj.AudioMediaPlayer()
-            loop_mode = pj.PJMEDIA_FILE_LOOP if do_loop else pj.PJMEDIA_FILE_NO_LOOP
-            self.__media_player_1.createPlayer(audio_file_path, loop_mode)
-            self.__media_player_1.startTransmit(call_media)
+                del self.__media_player_2
+                
 
     def listen(self) -> str:
         """
