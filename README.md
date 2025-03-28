@@ -1,8 +1,9 @@
 ## About
-Python package used to make and recieve calls and have them conducted by AI. 
-Can be used to build all kinds of realtime applications that work over the telephone network, including ones with complex conversational flows.
-Conversations can be defined by providing a YAML conversation configuration file. See annotated example in samples/sample_conversation_config.yaml.
-Calls are made via a SIP softphone using the PJSUA2 library. LLM and TTS/STT services accessed through OpenAI API. 
+☎️ Python package used to make and recieve calls and have them conducted by AI.  
+🔧 Can be used to build all kinds of realtime applications that work over the telephone network, including ones with complex conversational flows.  
+📖 It's like [Bland](https://www.bland.ai/) or [Synthflow](https://synthflow.ai/), but Open Source.  
+⚙️ Conversations can be defined by providing a YAML conversation configuration file (you can imagine the agent following a flowchart of conversation items that you specify). See annotated example in samples/sample_conversation_config.yaml.  
+📞 Calls are made via a SIP softphone using the PJSUA2 library. LLM and TTS/STT services accessed through OpenAI API. 
 
 ## Setup
 1. Install package 
@@ -16,7 +17,7 @@ Calls are made via a SIP softphone using the PJSUA2 library. LLM and TTS/STT ser
 
     from call_e import call_e
 
-    calle = call_e("samples/sample_credentials.json", "your_database_path.db")
+    calle = call_e("samples/sample_credentials.json")
 
     # Call a single phone number
     calle.call_number("+4912345678", "../samples/sample_conversation_config.yaml")
