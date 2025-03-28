@@ -230,12 +230,12 @@ class LLMExtractor:
             while len(self.__outgoing_buffer.queue) == 0:
                 time.sleep(0.2)
 
-            # wait for buffer to be filled up by a single message
-            previous_buffer_length = len(self.__outgoing_buffer.queue)
-            time.sleep(0.2)
-            while len(self.__outgoing_buffer.queue) != previous_buffer_length:
-                previous_buffer_length = len(self.__outgoing_buffer.queue)
-                time.sleep(0.2)
+            # # wait for buffer to be filled up by a single message
+            # previous_buffer_length = len(self.__outgoing_buffer.queue)
+            # time.sleep(0.2)
+            # while len(self.__outgoing_buffer.queue) != previous_buffer_length:
+            #     previous_buffer_length = len(self.__outgoing_buffer.queue)
+            #     time.sleep(0.2)
 
             audio_bytes = self.__outgoing_buffer.get()
 

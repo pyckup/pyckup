@@ -224,68 +224,76 @@ class Softphone:
             while self.has_picked_up_call():
 
                 # play back incoming audio buffer
-                incoming_audio_chunks = []
-                while not self.__external_incoming_buffer.empty():
-                    audio_chunk = self.__external_incoming_buffer.get()
-                    incoming_audio_chunks.append(audio_chunk)
-                    time.sleep(
-                        0.2
-                    )  # ensure that still incoming packages are caught as part of the same response
+                iteration_has_played_audio = False
+                while not self.__external_incoming_buffer.empty(): # ensure that still incoming packages are caught as part of the same response
+                    incoming_audio_chunks = []
+                    
+                    # wait it bit to catch more backages -> reduces stuttering (but slightly increases response time)
+                    if not iteration_has_played_audio:
+                        time.sleep(0.2)
+                        iteration_has_played_audio = True
 
-                if incoming_audio_chunks:
-                    self.__audio_output_lock.acquire()
-                    self.__interrupt_audio_output = False
-                    self.__prioritize_external_audio = False
+                    # empty queue completely
+                    while not self.__external_incoming_buffer.empty():
+                        audio_chunk = self.__external_incoming_buffer.get()
+                        incoming_audio_chunks.append(audio_chunk)
+                         
+                    if incoming_audio_chunks:
+                        if not self.__audio_output_lock.locked():
+                            self.__audio_output_lock.acquire()
+                        self.__interrupt_audio_output = False
+                        self.__prioritize_external_audio = False
 
-                    if not self.has_picked_up_call():
-                        self.__audio_output_lock.release()
-                        return
+                        if not self.has_picked_up_call():
+                            self.__audio_output_lock.release()
+                            return
 
-                    combined_incoming_audio = b"".join(incoming_audio_chunks)
-                    incoming_audio_segment = AudioSegment.from_file(
-                        io.BytesIO(combined_incoming_audio),
-                        format="raw",
-                        frame_rate=24000,
-                        channels=1,
-                        sample_width=2,
-                    )
-                    incoming_audio_path = str(
-                        HERE / f"../artifacts/{self.__id}_openai_incoming.wav"
-                    )
-                    incoming_audio_segment.export(incoming_audio_path, format="wav")
+                        combined_incoming_audio = b"".join(incoming_audio_chunks)
+                        incoming_audio_segment = AudioSegment.from_file(
+                            io.BytesIO(combined_incoming_audio),
+                            format="raw",
+                            frame_rate=24000,
+                            channels=1,
+                            sample_width=2,
+                        )
+                        incoming_audio_path = str(
+                            HERE / f"../artifacts/{self.__id}_openai_incoming.wav"
+                        )
+                        incoming_audio_segment.export(incoming_audio_path, format="wav")
 
-                    call_info = self.active_call.getInfo()
-                    for i in range(len(call_info.media)):
-                        if (
-                            call_info.media[i].type == pj.PJMEDIA_TYPE_AUDIO
-                            and call_info.media[i].status == pj.PJSUA_CALL_MEDIA_ACTIVE
-                        ):
-                            call_media = self.active_call.getAudioMedia(i)
-                            # use media player 2 for realtime conversation audio
-                            self.__media_player_2 = pj.AudioMediaPlayer()
-                            self.__media_player_2.createPlayer(
-                                incoming_audio_path, pj.PJMEDIA_FILE_NO_LOOP
-                            )
-                            self.__media_player_2.startTransmit(call_media)
-
-                            # wait until done speaking or external interruption
-                            time_to_wait = incoming_audio_segment.duration_seconds
-                            while (
-                                time_to_wait > 0 and not self.__interrupt_audio_output
+                        call_info = self.active_call.getInfo()
+                        for i in range(len(call_info.media)):
+                            if (
+                                call_info.media[i].type == pj.PJMEDIA_TYPE_AUDIO
+                                and call_info.media[i].status == pj.PJSUA_CALL_MEDIA_ACTIVE
                             ):
-                                time.sleep(0.2)
-                                time_to_wait -= 0.2
-                            self.__interrupt_audio_output = False
+                                call_media = self.active_call.getAudioMedia(i)
+                                # use media player 2 for realtime conversation audio
+                                self.__media_player_2 = pj.AudioMediaPlayer()
+                                self.__media_player_2.createPlayer(
+                                    incoming_audio_path, pj.PJMEDIA_FILE_NO_LOOP
+                                )
+                                self.__media_player_2.startTransmit(call_media)
 
-                            if self.__media_player_2:
-                                self.__media_player_2.stopTransmit(call_media)
-                                del self.__media_player_2
+                                # wait until done speaking or external interruption
+                                time_to_wait = incoming_audio_segment.duration_seconds
+                                while (
+                                    time_to_wait > 0 and not self.__interrupt_audio_output
+                                ):
+                                    time.sleep(0.2)
+                                    time_to_wait -= 0.2
+                                self.__interrupt_audio_output = False
+
+                                if self.__media_player_2:
+                                    self.__media_player_2.stopTransmit(call_media)
+                                    del self.__media_player_2
+                                    
+                # no more incoming packages
+                if self.__audio_output_lock.locked() and iteration_has_played_audio:
                     self.__audio_output_lock.release()
-                else:
-                    time.sleep(0.2)
+                time.sleep(0.2)
         except Exception as e:
             print("Error in external incoming buffer thread:", e)
-            # self.__group.pjsua_endpoint.libStopWorkerThreads()
             traceback.print_exc()
             return
 
@@ -328,7 +336,6 @@ class Softphone:
         except Exception as e:
             print("Error in external outgoing buffer thread:", e)
             traceback.print_exc()
-            # self.__group.pjsua_endpoint.libStopWorkerThreads()
             return
 
     def handle_external_buffers(self) -> Tuple[queue.Queue, queue.Queue]:
