@@ -5,8 +5,9 @@ with open("requirements.txt") as f:
     
 setup(
     name="calle",
-    version="1.0.1",
+    version="1.0.2",
     packages=find_packages(),
     install_requires=requirements,
+    package_data={'': ['resources/*', 'conf/*']},
     include_package_data=True,
 )
