@@ -13,16 +13,15 @@
 -    DTMF input
 
 ## Setup
-1. Install package 
-    - **automatically**: `pip install git+https://github.com/ruetzmax/call-e.git` (you may have to install missing dependencies) OR
-    - **manually**: `git clone https://github.com/ruetzmax/call-e.git`, `cd call-e`, `pip install -r requirements.txt`, `pip install .`
-2. [Install PJSUA2](https://docs.pjsip.org/en/latest/pjsua2/building.html) (there seems to be an issue in newer versions of the library, so checkout [this commit](https://github.com/pjsip/pjproject/commit/f5d890aa3463a096d7110ae935c67d6249d2f662) )
-3. Setup OPENAI API environment variable: `export OPENAI_API_KEY=<your_openai_api_key>`      
+1. `pip install git+https://github.com/ruetzmax/call-e.git`
+2. ´sudo apt install ffmpeg´
+3. [Install PJSUA2](https://docs.pjsip.org/en/latest/pjsua2/building.html) (there seems to be an issue in newer versions of the library, so checkout [this commit](https://github.com/pjsip/pjproject/commit/f5d890aa3463a096d7110ae935c67d6249d2f662) )
+4. Setup OPENAI API environment variable: `export OPENAI_API_KEY=<your_openai_api_key>`      
 
 ## Example Usage
 ### Making Calls
 
-    from call_e import call_e
+    from calle_core.call_e import call_e
 
     calle = call_e("samples/sample_credentials.json")
 
@@ -42,7 +41,7 @@
 
 
 ### Recieving calls
-    grp = calle.start_listening(HERE / "../samples/sample_conversation_config.yaml", num_devices=1)
+    grp = calle.start_listening("../samples/sample_conversation_config.yaml", num_devices=1)
     # calls can be recieved during this time
     input()
     calle.stop_listening(grp)
