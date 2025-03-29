@@ -1,0 +1,2 @@
+recursive-include call-e/resources *
+recursive-include call-e/conf *
