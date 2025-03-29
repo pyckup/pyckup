@@ -314,7 +314,7 @@ class call_e:
                     softphone.hangup()
                     print("Call interrupted during listening.")
 
-                softphone.play_audio(str(HERE / "../resources/processing.wav"))
+                softphone.play_audio(str(HERE / "resources/processing.wav"))
                 if enable_logging:
                     log_message(log_path, user_input, role="User")
                 extractor_responses = extractor.run_extraction_step(user_input)

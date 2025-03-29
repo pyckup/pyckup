@@ -126,7 +126,7 @@ class Softphone:
             None
         """
         # Load config
-        with open(HERE / "../conf/softphone_config.yaml", "r") as config_file:
+        with open(HERE / "conf/softphone_config.yaml", "r") as config_file:
             self.__config = yaml.safe_load(config_file)
 
         if group:
