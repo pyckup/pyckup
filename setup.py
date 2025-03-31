@@ -4,10 +4,10 @@ with open("requirements.txt") as f:
     requirements = f.read().splitlines()
     
 setup(
-    name="call_e",
+    name="pyckup",
     version="1.0.0",
     packages=find_packages(),
     install_requires=requirements,
-    package_data={'call_e': ['resources/*', 'conf/*']},
+    package_data={'pyckup': ['resources/*', 'conf/*']},
     include_package_data=True,
 )

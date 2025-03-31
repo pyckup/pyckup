@@ -4,5 +4,7 @@ sip_credentials.json
 sip_credentials_alt.json
 calle
 logs
-call_e.db
+pyckup.db
 cache
+pyckup.egg-info
+dist

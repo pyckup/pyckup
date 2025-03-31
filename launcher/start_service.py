@@ -9,22 +9,22 @@ def start_service(name, conversation_config_base64, sip_credentials_base64, num_
     # Write service config
     service_config = f"""
     [Unit]
-    Description=Runs Call-E instance {name}   
+    Description=Runs Pyckup instance {name}   
     After=network.target
 
     [Service]
-    ExecStart=/home/ubuntu/call-e/calle/bin/python /home/ubuntu/call-e/launcher/launcher.py
-    WorkingDirectory=/home/ubuntu/call-e/
+    ExecStart=python /home/ubuntu/pyckup/launcher/launcher.py
+    WorkingDirectory=/home/ubuntu/pyckup/
     Environment="name={name}"
     Environment="sip_credentials_base64={sip_credentials_base64}"
     Environment="conversation_config_base64={conversation_config_base64}"
     Environment="num_devices={num_devices}"
-    Environment="PYTHONPATH=${{PYTHONPATH}}:/home/ubuntu/call-e"
+    Environment="PYTHONPATH=${{PYTHONPATH}}:/home/ubuntu/pyckup"
     Environment="OPENAI_API_KEY={openai_key}"
     Restart=always
     User=ubuntu
     Group=ubuntu
-    StandardOutput=append:/home/ubuntu/call-e/launcher/artifacts/{name}.log
+    StandardOutput=append:/home/ubuntu/pyckup/launcher/artifacts/{name}.log
 
     [Install]
     WantedBy=multi-user.target
@@ -42,7 +42,7 @@ def start_service(name, conversation_config_base64, sip_credentials_base64, num_
     print(f"Started service {service_id}")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Start Call-E instance as a systemd service.')
+    parser = argparse.ArgumentParser(description='Start Pyckup instance as a systemd service.')
     parser.add_argument('name', type=str, help='Name of the service')
     parser.add_argument('conversation_config_base64', type=str, help='Base64 encoded conversation configuration')
     parser.add_argument('sip_credentials_base64', type=str, help='Base64 encoded SIP credentials')

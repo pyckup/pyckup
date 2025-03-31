@@ -3,7 +3,7 @@ import base64
 import os
 from pathlib import Path
 import sys
-from calle_core.call_e import call_e
+from pyckup_core.pyckup import Pyckup
 
 HERE = Path(os.path.abspath(__file__)).parent
 
@@ -13,7 +13,7 @@ def unpack_base64(base64_string, file_path):
     with open(file_path, 'wb') as file:
         file.write(base64.b64decode(base64_string))
     
-def launch_calle():
+def launch_pyckup():
     name = os.environ['name']
 
     # Ensure artifacts directory exists
@@ -29,8 +29,8 @@ def launch_calle():
     unpack_base64(os.environ['sip_credentials_base64'], sip_credentials_path)
     unpack_base64(os.environ['conversation_config_base64'], conversation_config_path)
     
-    calle = call_e(sip_credentials_path=sip_credentials_path, log_dir=log_dir)
-    calle.start_listening(conversation_config_path=conversation_config_path, num_devices=os.environ['num_devices'])
+    pu = Pyckup(sip_credentials_path=sip_credentials_path, log_dir=log_dir)
+    pu.start_listening(conversation_config_path=conversation_config_path, num_devices=os.environ['num_devices'])
     
 if __name__ == "__main__":
-    launch_calle()
+    launch_pyckup()

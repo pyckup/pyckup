@@ -2,9 +2,9 @@ import os
 from pathlib import Path
 import traceback
 import yaml
-from calle_core.llm_extractor import LLMExtractor, ExtractionStatus
-from calle_core.call_logging import log_message, setup_log
-from calle_core.softphone import Softphone, SoftphoneGroup
+from pyckup_core.llm_extractor import LLMExtractor, ExtractionStatus
+from pyckup_core.call_logging import log_message, setup_log
+from pyckup_core.softphone import Softphone, SoftphoneGroup
 import sqlite3
 import threading
 import time
@@ -13,7 +13,7 @@ from typing import Optional, Tuple, Dict, List
 HERE = Path(os.path.abspath(__file__)).parent
 
 
-class call_e:
+class Pyckup:
 
     db = None
 
@@ -25,7 +25,7 @@ class call_e:
         realtime: bool = True,
     ) -> None:
         """
-        Create an instance of the call_e class.
+        Create an instance of the Pyckup class.
 
         Args:
             sip_credentials_path (str): The file path to the SIP credentials.
@@ -278,7 +278,7 @@ class call_e:
                     chat_history = extractor.chat_history
                     for message in chat_history[num_logged_messages:]:
                         if message.type == "ai":
-                            log_message(log_path, message.content, role="Call-E")
+                            log_message(log_path, message.content, role="Pyckup")
                         elif message.type == "human":
                             log_message(log_path, message.content, role="User")
                     num_logged_messages += len(chat_history[num_logged_messages:])
@@ -297,7 +297,7 @@ class call_e:
             extractor_responses = extractor.run_extraction_step("")
             if enable_logging:
                 for response in extractor_responses:
-                    log_message(log_path, response[0], role="Call-E")
+                    log_message(log_path, response[0], role="Pyckup")
             for response in extractor_responses:
                 cache_audio = True if response[1] == "read" else False
                 softphone.say(response[0], cache_audio=cache_audio)
@@ -320,7 +320,7 @@ class call_e:
                 extractor_responses = extractor.run_extraction_step(user_input)
                 if enable_logging:
                     for response in extractor_responses:
-                        log_message(log_path, response[0], role="Call-E")
+                        log_message(log_path, response[0], role="Pyckup")
                 for response in extractor_responses:
                     cache_audio = True if response[1] == "read" else False
                     softphone.say(response[0], cache_audio=cache_audio)

@@ -1,4 +1,4 @@
-# Contributing to Call-E
+# Contributing to Pyckup
 
 First off, thanks for taking the time to contribute! 
 
@@ -65,7 +65,7 @@ We use GitHub issues to track bugs and errors. If you run into an issue with the
 
 ### Suggesting Enhancements
 
-This section guides you through submitting an enhancement suggestion for Call-E, **including completely new features and minor improvements to existing functionality**. Following these guidelines will help maintainers and the community to understand your suggestion and find related suggestions.
+This section guides you through submitting an enhancement suggestion for Pyckup, **including completely new features and minor improvements to existing functionality**. Following these guidelines will help maintainers and the community to understand your suggestion and find related suggestions.
 
 
 #### Before Submitting an Enhancement

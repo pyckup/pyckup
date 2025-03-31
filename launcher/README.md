@@ -1,1 +1,1 @@
-Start an instance of Call-E from CLI as systemd service
+Start an instance of Pyckup from CLI as systemd service

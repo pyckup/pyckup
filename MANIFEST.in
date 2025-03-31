@@ -1,2 +1,2 @@
-recursive-include calle_core/resources *
-recursive-include calle_core/conf *
+recursive-include pyckup_core/resources *
+recursive-include pyckup_core/conf *

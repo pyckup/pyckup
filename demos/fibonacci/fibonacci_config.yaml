@@ -2,12 +2,12 @@ conversation_title: Fibonacci Demo
 conversation_paths:
   entry: 
     - type: read 
-      text: Hi, you are talking to Call-E. What can I do for you?
+      text: Hi, thank you for calling. What can I do for you?
     - type: path
       path: main
   main: # main interaction loop
     - type: choice 
-      choice: What can I do for you?
+      choice: I can either
       silent: True
       options:
         - option: Read Fibonacci numbers

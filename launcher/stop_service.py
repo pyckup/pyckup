@@ -20,7 +20,7 @@ def stop_service(name):
     print(f"Stopped service {service_id}")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Stop systemd service of Call-E instance.')
+    parser = argparse.ArgumentParser(description='Stop systemd service of Pyckup instance.')
     parser.add_argument('name', type=str, help='Name of the service')
 
     args = parser.parse_args()

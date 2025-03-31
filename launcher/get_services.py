@@ -5,7 +5,7 @@ import subprocess
 def get_services():
     service_names = []
     for service_name in os.listdir("/etc/systemd/system/"):
-        if service_name.startswith("calle_"):
+        if service_name.startswith("pickup_"):
             service_names.append(service_name)
     
     services = []

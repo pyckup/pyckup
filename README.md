@@ -1,5 +1,5 @@
 ## About
-☎️ Call-E is a Python package used to make and recieve calls and have them conducted by AI.  
+☎️ Pyckup is a Python package used to make and recieve calls and have them conducted by AI.  
 🔧 Can be used to build all kinds of realtime applications that work over the telephone network, including ones with complex conversational flows.  
 📖 It's like [Bland](https://www.bland.ai/) or [Synthflow](https://synthflow.ai/), but Open Source.  
 ⚙️ Conversations can be defined by providing a YAML conversation configuration file (you can imagine the agent following a flowchart of conversation items that you specify). See annotated example in samples/sample_conversation_config.yaml.  
@@ -10,10 +10,11 @@
 -    custom code integration allows for limitless use cases
 -    quick realtime responses
 -    multiple simultaneous calls on the same number
+-    fully functional SIP softphone
 -    DTMF input
 
 ## Setup
-1. Install the package: `pip install git+https://github.com/ruetzmax/call-e.git`
+1. Install the package: `pip install git+https://github.com/pyckup/pyckup.git
 2. Install FFMPEG: `sudo apt install ffmpeg`
 3. [Install PJSUA2](https://docs.pjsip.org/en/latest/pjsua2/building.html) (there seems to be an issue in newer versions of the library, so checkout [this commit](https://github.com/pjsip/pjproject/commit/f5d890aa3463a096d7110ae935c67d6249d2f662) )
 4. Setup OPENAI API environment variable: `export OPENAI_API_KEY=<your_openai_api_key>`      
@@ -21,30 +22,30 @@
 ## Example Usage
 ### Making Calls
 
-    from calle_core.call_e import call_e
+    from pyckup_core.pyckup import Pyckup
 
-    calle = call_e("samples/sample_credentials.json")
+    pu = Pyckup("samples/sample_credentials.json")
 
     # Call a single phone number
-    calle.call_number("+4912345678", "../samples/sample_conversation_config.yaml")
+    pu.call_number("+4912345678", "../samples/sample_conversation_config.yaml")
 
     # Call multiple phone numbers
-    calle.call_numbers(["+4912345678", "+499876543"], "../samples/sample_conversation_config.yaml")
+    pu.call_numbers(["+4912345678", "+499876543"], "../samples/sample_conversation_config.yaml")
 
     # Call a single contact
-    calle.add_contact("Marius Testperson", "+4912345678")
-    calle.call_contact(1, "../samples/sample_conversation_config.yaml")
+    pu.add_contact("Marius Testperson", "+4912345678")
+    pu.call_contact(1, "../samples/sample_conversation_config.yaml")
 
     # Call multiple contacts
-    calle.add_contact("Maria Testperson", "+499876543")
-    calle.call_contacts("../samples/sample_conversation_config.yaml")
+    pu.add_contact("Maria Testperson", "+499876543")
+    pu.call_contacts("../samples/sample_conversation_config.yaml")
 
 
 ### Recieving calls
-    grp = calle.start_listening("../samples/sample_conversation_config.yaml", num_devices=1)
+    grp = pu.start_listening("../samples/sample_conversation_config.yaml", num_devices=1)
     # calls can be recieved during this time
     input()
-    calle.stop_listening(grp)
+    pu.stop_listening(grp)
 
 ## Contributing
 For information on how to contribute to the repository, see [the contribution guide](CONTRIBUTING.md)
