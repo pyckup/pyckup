@@ -1,0 +1,9 @@
+conversation_title: Hello World Demo
+conversation_paths:
+  entry: 
+    - type: read 
+      text: Hello World
+  aborted:
+
+  
+
