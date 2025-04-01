@@ -19,9 +19,11 @@ To use Pyckup, you will need a [SIP-trunk](https://aws.amazon.com/what-is/sip-tr
 }
 ```
 
+Replace the placeholder values with the actual ones from your SIP account.
+
 ## Setup conversation config
 
-The conversation config is the heart of your Pyckup application and contains a blueprint of each user conversation that is followed by the AI agent. It is composed of multiple conversation items, that respresent different actions the agen can perform. Now you can create a `hello_world_config.yaml`.
+The conversation config is the heart of your Pyckup application and contains a blueprint of each user conversation that is followed by the AI agent. It is composed of multiple conversation items, that respresent different actions the agent can perform. You can create a `hello_world_config.yaml`:
 
 ```yaml
 conversation_title: Hello World Demo

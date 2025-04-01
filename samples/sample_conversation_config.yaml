@@ -3,7 +3,6 @@ conversation_paths:
   entry: # entry point of the conversation
     - type: read # read out the specified text
       text: Hello, thank you for calling. Do you want to introduce yourself?
-      interactive: false
     - type: choice # ask the user to choose between multiple options
       choice: Do you want to introduce yourself?
       silent: True # for silent choices, the options will not be read out
@@ -15,7 +14,6 @@ conversation_paths:
               title: name
               description: The first name of the user. 
               format: The first name of the user, starting with a capital letter.
-              interactive: false
             - type: function_choice # call a function from the provided module. Return value determines the path chosen.
               module: samples.sample_trunks
               function: name_is_marius
@@ -33,7 +31,6 @@ conversation_paths:
           items:
             - type: prompt # give instructions to the LLM
               prompt: Wish the user a nice day.
-              interactive: false
   is_marius:
     - type: choice # ask the user to choose between multiple options
       choice: Do you prefer apples or oranges?
@@ -55,9 +52,6 @@ conversation_paths:
   aborted: # path to be taken if the conversation is aborted by the user
     - type: prompt
       prompt: Apologize to the user.
-      interactive: false
     - type: read
-      text: Goodbye, thank you again for calling.
-      interactive: false
-  
+      text: Goodbye, thank you again for calling.  
 
