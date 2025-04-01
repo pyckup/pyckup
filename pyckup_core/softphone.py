@@ -395,7 +395,7 @@ class Softphone:
     def forward_call(self, phone_number: str, timeout: Optional[float] = None) -> bool:
         """
         Attempt to forward the current call to a specified phone number. A seperate call will be made and the
-        two calls will be connected.
+        two calls will be paired.
 
         Args:
             phone_number (str): The phone number to forward the call to in E.164 format.
@@ -468,6 +468,12 @@ class Softphone:
         return True
 
     def is_forwarded(self) -> bool:
+        """
+        Check if the current call is forwarded.
+
+        Returns:
+            bool: True if the current call is forwarded, False otherwise.
+        """
         return self.__paired_call is not None
 
     def __has_picked_up_call(self, call_type: str = "active") -> bool:
@@ -630,6 +636,7 @@ class Softphone:
 
         Args:
             message (str): The message to be converted to speech and streamed to the call.
+            cache_audio (bool, optional): If True, the audio will be cached for future use. Defaults to False.
 
         Returns:
             None

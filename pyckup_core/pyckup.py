@@ -30,7 +30,7 @@ class Pyckup:
         Args:
             sip_credentials_path (str): The file path to the SIP credentials.
             db_path (str, optional): The file path to the database (will be created if it doesn't exist). If None, database functions can't be used. Defaults to None.
-            log_dir (str, optional): The directory where logs will be saved. If None, loggin is disabled. Defaults to None.
+            log_dir (str, optional): The directory where logs will be saved. If None, logging is disabled. Defaults to None.
             realtime (bool, optional): Whether to use the OpenAI realtime API. Defaults to True.
         """
         self.__sip_credentials_path = sip_credentials_path
@@ -453,11 +453,11 @@ class Pyckup:
         enable_logging: bool = True,
     ) -> None:
         """
-        Initiate a call to a phone number and lead recipient through the current outgoing conversation.
+        Initiate a call to a phone number and lead recipient through the specifiedconversation.
         Update contact status while doing so.
 
         Args:
-            contact_id (int): The ID of the contact to call.
+            phone_number (int): The phone number to call in E.164 format.
             conversation_config_path (str): The file path to the conversation configuration.
             enable_logging (bool, optional): Whether to save a log of the conversation. Defaults to True.
 
@@ -477,7 +477,7 @@ class Pyckup:
         enable_logging: bool = True,
     ) -> None:
         """
-        Initiate a call to a contact and lead them through the current outgoing conversation.
+        Initiate a call to a contact and lead them through the specified conversation.
         Update contact status while doing so.
 
         Args:
@@ -505,7 +505,7 @@ class Pyckup:
         enable_logging: bool = True,
     ) -> None:
         """
-        Call a list of phone numbers and lead them through the current outgoing conversation.
+        Call a list of phone numbers and lead them through the specified conversation.
 
         Args:
             phone_numbers (list of str): A list of phone numbers to call in E.164 format.
