@@ -94,7 +94,7 @@ Initialize a Softphone instance with the provided SIP credentials. Used to make 
 #### Arguments
 -   `credentials_path (str)`: The file path to the SIP credentials.
 
-### call
+### get_id
 ```python
 def get_id(self) -> str:
 ``` 
