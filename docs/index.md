@@ -12,3 +12,5 @@
 -    multiple simultaneous calls on the same number
 -    fully functional SIP softphone
 -    DTMF input
+
+A good point to get started with Pyckup is the [quickstart](quickstart.md).

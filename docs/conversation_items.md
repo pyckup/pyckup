@@ -79,7 +79,7 @@ def your_function(conversation_state, softphone):
     # enter your code here
     return text_to_be_read
 ```
-`conversation state` is a dict containing all the previously extracted information. `softphone` is the Softphone object that is used to handle the call. See the Softphone docs for more details. (Todo insert link). The text returned by your function will be read out by the agent. Can return None.
+`conversation state` is a dict containing all the previously extracted information. `softphone` is the Softphone object that is used to handle the call. See the [Softphone API](api.md#softphone) for more details. The text returned by your function will be read out by the agent. Can return None.
 ### Parameters
 -   `module (str)`: The module your function is located in.
 -   `function (str)`: The name of your function.

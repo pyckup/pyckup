@@ -4,7 +4,7 @@ Here we will set up a simple Hello-World-service, that when called will simply r
 
 ## Install Pyckup
 
-Follow the installation guide (TODO insert link)
+Follow the [installation guide](installation.md).
 
 ## Setup your SIP credentials
 
@@ -34,7 +34,7 @@ conversation_paths:
   aborted:
 ```
 
-This simple example just reads out "Hello World" after the conversation has started and then ends. For a full list of possible actions, see the conversation items documentation. (TODO insert link)
+This simple example just reads out "Hello World" after the conversation has started and then ends. For a full list of possible actions, see the [conversation items documentation](conversation_items.md).
 
 ## Start Pyckup
 
