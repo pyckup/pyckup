@@ -1,1 +1,9 @@
-site_name: My Docs
+site_name: Pyckup
+theme:
+  name: readthedocs
+nav:
+ - About: index.md
+ - Installation: installation.md
+ - Quickstart: quickstart.md
+ - Conversation Items: conversation_items.md
+ - API: api.md
