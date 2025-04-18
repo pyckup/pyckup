@@ -18,6 +18,9 @@ import websocket
 from typing import Any, Dict, List, Optional, Tuple, Union
 from queue import Queue
 
+from pyckup_core.conversation_config import ChoiceItem, ChoiceItemBase, ConversationConfig, ConversationItem, FunctionChoiceItem, FunctionItem, InformationItem, PathItem, PromptItem, ReadItem
+from pyckup_core.softphone import Softphone
+
 
 HERE = Path(os.path.abspath(__file__)).parent
 
@@ -29,7 +32,7 @@ class LLMExtractor:
     The conversation is defined in the conversation configuration.
 
     Args:
-        conversation_config (dict): Dictionary containing the conversation items (read from the conversation config document).
+        conversation_config (ConversationConfig): The conversation configuration object that defines the conversation flow.
         llm_provider (str, optional): The LLM provider to use. Options are "openai" and "ollama". Defaults to "openai".
         softphone (object, optional): Softphone used for passing to function calls. Defaults to None.
         realtime (bool, optional): Whether to use the OpenAI realtime API. Defaults to True.
@@ -40,7 +43,7 @@ class LLMExtractor:
 
     def __init__(
         self,
-        conversation_config: Dict[str, Any],
+        conversation_config: ConversationConfig,
         llm_provider: str = "openai",
         softphone: Optional[Any] = None,
         realtime: bool = True,
@@ -58,8 +61,11 @@ class LLMExtractor:
 
         self.status = ExtractionStatus.IN_PROGRESS
         self.chat_history = []
+        
+        self.__softphone : Softphone = softphone
 
-        self.__conversation_config = copy.deepcopy(conversation_config)
+
+        self.__conversation_config : ConversationConfig = copy.deepcopy(conversation_config)
         self.__load_conversation_path("entry")
         self.__conversation_state = (
             {}
@@ -71,7 +77,6 @@ class LLMExtractor:
             None  # if information filtering failed, the item is repeated
         )
 
-        self.__softphone = softphone
 
         softphone.add_dtmf_reciever(self.__check_dialled_choice)
         self.__dialled_choice = None  # the choice selected by user dial input
@@ -266,10 +271,10 @@ class LLMExtractor:
         Raises:
             KeyError: If the conversation path does not exist in the configuration.
         """
-        self.__conversation_items = self.__conversation_config["conversation_paths"][
+        self.__conversation_items : List[ConversationItem]  = self.__conversation_config.paths[
             conversation_path
         ]
-        self.__current_item = self.__conversation_items.pop(0)
+        self.__current_item : ConversationItem = self.__conversation_items.pop(0)
 
     def __verify_information(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -454,7 +459,7 @@ class LLMExtractor:
         return choice_extractor
 
     def __append_filtered_info(
-        self, data: Dict[str, Any], information_item: Dict[str, Any]
+        self, data: Dict[str, Any], information_item: InformationItem
     ) -> None:
         """
         Append filtered information thread-safely to the extracted information dictionary.
@@ -469,7 +474,7 @@ class LLMExtractor:
         self.__conversation_state_lock.acquire()
         filtered_info = self.__filter_information(data)
         if filtered_info:
-            self.__conversation_state[information_item["title"]] = filtered_info
+            self.__conversation_state[information_item.title] = filtered_info
             self.__repeat_item = None
         else:
             # information couldn't be extracted, so repeat the item at next possibility
@@ -499,44 +504,8 @@ class LLMExtractor:
             self.status = ExtractionStatus.COMPLETED
             return ""
 
-        return self.__process_conversation_items(data["input"], is_recursive=True)
+        return self.__process_conversation_items(data["input"], is_recursive=True)    
 
-    def __get_items_for_choice(self, choice: str) -> List[Dict[str, Any]]:
-        """
-        Get the conversation items for a given choice of the current choice item.
-
-        Args:
-            choice (str): The selected choice.
-
-        Returns:
-            list: The conversation items for the selected choice.
-        """
-        if (
-            self.__current_item["type"] != "choice"
-            and self.__current_item["type"] != "function_choice"
-        ):
-            return []
-
-        return [
-            option
-            for option in self.__current_item["options"]
-            if option["option"] == choice
-        ][0]["items"]
-
-    def __get_all_options(self) -> List[str]:
-        """
-        Get all possible options for the current choice item.
-
-        Returns:
-            list: The possible options for the current choice item.
-        """
-        if (
-            self.__current_item["type"] != "choice"
-            and self.__current_item["type"] != "function_choice"
-        ):
-            return []
-
-        return [option["option"] for option in self.__current_item["options"]]
 
     def __choice_extraction_successful(self, data: Dict[str, Any]) -> str:
         """
@@ -549,7 +518,11 @@ class LLMExtractor:
             str: The result of processing the next conversation item.
         """
         selected_choice = data["choice"]
-        self.__conversation_items = self.__get_items_for_choice(selected_choice)
+        
+        
+        assert (isinstance(self.__current_item, ChoiceItemBase))
+        
+        self.__conversation_items = self.__current_item.get_items_for_choice(selected_choice)
         self.__current_item = self.__conversation_items.pop(0)
         return self.__process_conversation_items(data["input"], is_recursive=True)
 
@@ -566,7 +539,7 @@ class LLMExtractor:
 
         self.status = ExtractionStatus.ABORTED
 
-        self.__conversation_items = copy.deepcopy(self.__conversation_config["conversation_paths"][
+        self.__conversation_items = copy.deepcopy(self.__conversation_config.paths[
             "aborted"
         ])
         if len(self.__conversation_items) > 0:
@@ -642,12 +615,13 @@ class LLMExtractor:
         Returns:
             None
         """
-        if self.__current_item["type"] != "choice":
+        
+        if not isinstance(self.__current_item, ChoiceItemBase):
             return
 
-        for option in self.__current_item["options"]:
-            if str(option.get("dial_number", "none")) == str(dialled_number):
-                self.__dialled_choice = option["option"]
+        for option in self.__current_item.options:
+            if str(option.dial_number) == str(dialled_number):
+                self.__dialled_choice = option.option
                 self.__current_item_in_progress = False
                 return
 
@@ -694,7 +668,7 @@ class LLMExtractor:
         return args, chat_messages
 
     def __process_read_item(
-        self, item: Dict[str, Any]
+        self, item: ReadItem
     ) -> Tuple[List[Tuple[str, str]], List[Any], bool]:
         """
         Process a conversation item of type read and generate responses.
@@ -702,7 +676,7 @@ class LLMExtractor:
         Returns:
             tuple: A tuple containing the responses (list), chat messages (list), and a boolean indicating if interaction is required (bool).
         """
-        response_text = item["text"] + "\n"
+        response_text = item.text + "\n"
         responses = [(response_text, "read")]
         chat_messages = [AIMessage(content=response_text)]
         requires_interaction = self.__realtime
@@ -710,7 +684,7 @@ class LLMExtractor:
         return responses, chat_messages, requires_interaction
 
     def __process_prompt_item(
-        self, item: Dict[str, Any]
+        self, item: PromptItem
     ) -> Tuple[List[Tuple[str, str]], List[Any], bool]:
         """
         Process a conversation item of type prompt and generate responses.
@@ -731,7 +705,7 @@ class LLMExtractor:
                     "content": [
                         {
                             "type": "input_text",
-                            "text": f"Execute the given prompt: {item['prompt']}",
+                            "text": f"Execute the given prompt: {item.prompt}",
                         }
                     ],
                 },
@@ -759,14 +733,14 @@ class LLMExtractor:
             chat_messages = self.__current_item_messages
         else:
             # NON-REALTIME CASE
-            response_text = self.__execute_prompt(item["prompt"]) + "\n"
+            response_text = self.__execute_prompt(item.prompt) + "\n"
             responses = [(response_text, "prompt")]
             chat_messages = [AIMessage(content=response_text)]
 
         return responses, chat_messages, False
 
     def __process_path_item(
-        self, item: Dict[str, Any]
+        self, item: PathItem
     ) -> Tuple[List[Tuple[str, str]], List[Any], bool]:
         """
         Process a conversation item of type path and generate responses.
@@ -774,14 +748,14 @@ class LLMExtractor:
         Returns:
             tuple: A tuple containing the responses (list), chat messages (list), and a boolean indicating if interaction is required (bool).
         """
-        self.__conversation_items = copy.deepcopy(self.__conversation_config["conversation_paths"][
-            item["path"]
+        self.__conversation_items = copy.deepcopy(self.__conversation_config.paths[
+            item.path
         ])
 
         return [], [], False
 
     def __process_information_item(
-        self, item: Dict[str, Any], user_input: str, is_recursive: bool
+        self, item: InformationItem, user_input: str, is_recursive: bool
     ) -> Tuple[List[Tuple[str, str]], List[Any], bool]:
         """
         Process a conversation item of type information and generate responses.
@@ -799,7 +773,7 @@ class LLMExtractor:
                         {
                             "type": "function",
                             "name": "information_callback",
-                            "description": f"Call this function once you have sucessfully extracted the information from the user. Provide as a parameter the extracted information. The parameter should be in the following format: {item['format']}. If the user seems doesn't want to answer or wants to quit the conversation, output ##ABORT## as parameter.",
+                            "description": f"Call this function once you have sucessfully extracted the information from the user. Provide as a parameter the extracted information. The parameter should be in the following format: {item.format}. If the user seems doesn't want to answer or wants to quit the conversation, output ##ABORT## as parameter.",
                             "parameters": {
                                 "type": "object",
                                 "properties": {"information": {"type": "string"}},
@@ -820,7 +794,7 @@ class LLMExtractor:
                     "content": [
                         {
                             "type": "input_text",
-                            "text": f"Extract a piece of information from the user. If the user derivates from the topic, lead them gently back to it. Once you have the information, don't give any response. Required information: {item['description']}",
+                            "text": f"Extract a piece of information from the user. If the user derivates from the topic, lead them gently back to it. Once you have the information, don't give any response. Required information: {item.description}",
                         }
                     ],
                 },
@@ -850,7 +824,7 @@ class LLMExtractor:
                 self.__extraction_aborted({})
 
             self.__conversation_state_lock.acquire()
-            self.__conversation_state[item["title"]] = information
+            self.__conversation_state[item.title] = information
             self.__repeat_item = None
             self.__conversation_state_lock.release()
 
@@ -862,8 +836,8 @@ class LLMExtractor:
                 {
                     "input": user_input,
                     "chat_history": self.chat_history,
-                    "current_information_description": item["description"],
-                    "current_information_format": item["format"],
+                    "current_information_description": item.description,
+                    "current_information_format": item.format,
                     "is_recursive": is_recursive,
                 }
             )
@@ -878,7 +852,7 @@ class LLMExtractor:
         return responses, chat_messages, requires_interaction
 
     def __process_choice_item(
-        self, item: Dict[str, Any], user_input: str, is_recursive: bool
+        self, item: ChoiceItem, user_input: str, is_recursive: bool
     ) -> Tuple[List[Tuple[str, str]], List[Any], bool]:
         """
         Process a conversation item of type choice and generate responses.
@@ -896,7 +870,7 @@ class LLMExtractor:
                         {
                             "type": "function",
                             "name": "choice_callback",
-                            "description": f"Call this function once you have sucessfully extracted the selected choice, which should be only one of the following: {self.__get_all_options()}. If the user seems doesn't want to answer or wants to quit the conversation, output ##ABORT## as parameter.",
+                            "description": f"Call this function once you have sucessfully extracted the selected choice, which should be only one of the following: {item.get_all_options()}. If the user seems doesn't want to answer or wants to quit the conversation, output ##ABORT## as parameter.",
                             "parameters": {
                                 "type": "object",
                                 "properties": {"choice": {"type": "string"}},
@@ -909,7 +883,7 @@ class LLMExtractor:
             self.__realtime_connection.send(json.dumps(session_update_event))
 
             # instruct the model to extract choice
-            is_silent = item.get("silent", False)
+            is_silent = item.silent
             silent_prompt_text = (
                 "At the start of the conversation say nothing and wait for the user to say something."
                 if is_silent
@@ -923,7 +897,7 @@ class LLMExtractor:
                     "content": [
                         {
                             "type": "input_text",
-                            "text": f"Present the choice to the user and ask them to select one of the given options. If the user derivates from the topic, lead them gently back to it. Once you have the selected option, don't give any response. {silent_prompt_text} Choice: {item['choice']}, Possible options: {self.__get_all_options()}",
+                            "text": f"Present the choice to the user and ask them to select one of the given options. If the user derivates from the topic, lead them gently back to it. Once you have the selected option, don't give any response. {silent_prompt_text} Choice: {item.choice}, Possible options: {item.get_all_options()}",
                         }
                     ],
                 },
@@ -953,22 +927,26 @@ class LLMExtractor:
             if selected_choice == "##ABORT##":
                 self.__extraction_aborted({})
 
-            self.__conversation_items = self.__get_items_for_choice(selected_choice)
+            assert (isinstance(self.__current_item, ChoiceItemBase))
+
+            self.__conversation_items = self.__current_item.get_items_for_choice(
+                selected_choice
+            )
 
             responses = [("Realtime Conversation", "choice")]
             requires_interaction = False
         else:
             # NON-REALTIME CASE
-            if item["silent"] and not item.get("first_run_done", False):
-                item["first_run_done"] = True
+            if item.silent and not item.first_run_done:
+                item.first_run_done = True
                 return [], [], True
 
             response = self.choice_extraction_chain.invoke(
                 {
                     "input": user_input,
                     "chat_history": self.chat_history,
-                    "current_choice": item["choice"],
-                    "current_choice_options": list(self.__get_all_options()),
+                    "current_choice": item.choice,
+                    "current_choice_options": list(item.get_all_options()),
                     "is_recursive": is_recursive,
                 }
             )
@@ -983,7 +961,7 @@ class LLMExtractor:
         return responses, chat_messages, requires_interaction
 
     def __process_function_item(
-        self, item: Dict[str, Any]
+        self, item: FunctionItem
     ) -> Tuple[List[Tuple[str, str]], List[Any], bool]:
         """
         Process a conversation item of type function and generate responses.
@@ -995,8 +973,7 @@ class LLMExtractor:
         if not information_is_valid:
             return [], [], False
 
-        module = importlib.import_module(item["module"])
-        function = getattr(module, item["function"])
+        function = item.function
         response_text = function(self.__conversation_state, self.__softphone)
         if response_text:
             responses = [(response_text, "function")]
@@ -1010,7 +987,7 @@ class LLMExtractor:
         return responses, chat_messages, requires_interaction
 
     def __process_function_choice_item(
-        self, item: Dict[str, Any]
+        self, item: FunctionChoiceItem
     ) -> Tuple[List[Tuple[str, str]], List[Any], bool]:
         """
         Process a conversation item of type function choice and generate responses.
@@ -1022,10 +999,10 @@ class LLMExtractor:
         if not information_is_valid:
             return [], [], False
 
-        module = importlib.import_module(item["module"])
-        function = getattr(module, item["function"])
+        function = item.function
         choice = function(self.__conversation_state, self.__softphone)
-        self.__conversation_items = self.__get_items_for_choice(choice)
+        
+        self.__conversation_items = item.get_items_for_choice(choice)
 
         return [], [], False
 
@@ -1053,35 +1030,35 @@ class LLMExtractor:
             # check if conversation item needs to be repeated
             self.__check_item_repetition()
 
-            if self.__current_item["type"] == "read":
+            if isinstance(self.__current_item, ReadItem):
                 responses, chat_messages, requires_interaction = (
                     self.__process_read_item(self.__current_item)
                 )
-            elif self.__current_item["type"] == "prompt":
+            elif isinstance(self.__current_item, PromptItem):
                 responses, chat_messages, requires_interaction = (
                     self.__process_prompt_item(self.__current_item)
                 )
-            elif self.__current_item["type"] == "path":
+            elif isinstance(self.__current_item, PathItem):
                 responses, chat_messages, requires_interaction = (
                     self.__process_path_item(self.__current_item)
                 )
-            elif self.__current_item["type"] == "information":
+            elif isinstance(self.__current_item, InformationItem):
                 responses, chat_messages, requires_interaction = (
                     self.__process_information_item(
                         self.__current_item, user_input, is_recursive
                     )
                 )
-            elif self.__current_item["type"] == "choice":
+            elif isinstance(self.__current_item, ChoiceItem):
                 responses, chat_messages, requires_interaction = (
                     self.__process_choice_item(
                         self.__current_item, user_input, is_recursive
                     )
                 )
-            elif self.__current_item["type"] == "function":
+            elif isinstance(self.__current_item, FunctionItem):
                 responses, chat_messages, requires_interaction = (
                     self.__process_function_item(self.__current_item)
                 )
-            elif self.__current_item["type"] == "function_choice":
+            elif isinstance(self.__current_item, FunctionChoiceItem):
                 responses, chat_messages, requires_interaction = (
                     self.__process_function_choice_item(self.__current_item)
                 )
@@ -1096,7 +1073,7 @@ class LLMExtractor:
                 # for interactive items, breakt the loop to get user input. Last item can`t be interactive.
                 if (
                     requires_interaction and self.__realtime
-                ) or self.__current_item.get("interactive", False):
+                ) or self.__current_item.interactive:
                     self.__current_item = self.__conversation_items.pop(0)
                     break
                 else:
