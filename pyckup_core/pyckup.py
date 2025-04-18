@@ -43,7 +43,6 @@ class Pyckup:
         if self.db is not None:
             self.db.close()
 
-
     def setup_conversation(self, conversation_config: ConversationConfig) -> str:
         """
         Get conversation config and title and, if database functionality is used, ensure tables exist.
@@ -55,9 +54,7 @@ class Pyckup:
             Tuple[Dict, str]: A tuple containing the conversation configuration dictionary and the conversation title string.
         """
 
-        conversation_title = (
-            conversation_config.title.lower().replace(" ", "_")
-        )
+        conversation_title = conversation_config.title.lower().replace(" ", "_")
 
         if self.db is not None:
             # ensure that results table exists
@@ -383,9 +380,7 @@ class Pyckup:
             )
             return
 
-        conversation_title = self.setup_conversation(
-            conversation_config
-        )
+        conversation_title = self.setup_conversation(conversation_config)
 
         if contact_id and self.db is not None:
             contact = self.get_contact(contact_id)

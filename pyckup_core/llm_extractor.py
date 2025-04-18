@@ -18,7 +18,18 @@ import websocket
 from typing import Any, Dict, List, Optional, Tuple, Union
 from queue import Queue
 
-from pyckup_core.conversation_config import ChoiceItem, ChoiceItemBase, ConversationConfig, ConversationItem, FunctionChoiceItem, FunctionItem, InformationItem, PathItem, PromptItem, ReadItem
+from pyckup_core.conversation_config import (
+    ChoiceItem,
+    ChoiceItemBase,
+    ConversationConfig,
+    ConversationItem,
+    FunctionChoiceItem,
+    FunctionItem,
+    InformationItem,
+    PathItem,
+    PromptItem,
+    ReadItem,
+)
 from pyckup_core.softphone import Softphone
 
 
@@ -61,11 +72,12 @@ class LLMExtractor:
 
         self.status = ExtractionStatus.IN_PROGRESS
         self.chat_history = []
-        
-        self.__softphone : Softphone = softphone
 
+        self.__softphone: Softphone = softphone
 
-        self.__conversation_config : ConversationConfig = copy.deepcopy(conversation_config)
+        self.__conversation_config: ConversationConfig = copy.deepcopy(
+            conversation_config
+        )
         self.__load_conversation_path("entry")
         self.__conversation_state = (
             {}
@@ -76,7 +88,6 @@ class LLMExtractor:
         self.__repeat_item = (
             None  # if information filtering failed, the item is repeated
         )
-
 
         softphone.add_dtmf_reciever(self.__check_dialled_choice)
         self.__dialled_choice = None  # the choice selected by user dial input
@@ -271,10 +282,10 @@ class LLMExtractor:
         Raises:
             KeyError: If the conversation path does not exist in the configuration.
         """
-        self.__conversation_items : List[ConversationItem]  = self.__conversation_config.paths[
-            conversation_path
-        ]
-        self.__current_item : ConversationItem = self.__conversation_items.pop(0)
+        self.__conversation_items: List[ConversationItem] = (
+            self.__conversation_config.paths[conversation_path]
+        )
+        self.__current_item: ConversationItem = self.__conversation_items.pop(0)
 
     def __verify_information(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -504,8 +515,7 @@ class LLMExtractor:
             self.status = ExtractionStatus.COMPLETED
             return ""
 
-        return self.__process_conversation_items(data["input"], is_recursive=True)    
-
+        return self.__process_conversation_items(data["input"], is_recursive=True)
 
     def __choice_extraction_successful(self, data: Dict[str, Any]) -> str:
         """
@@ -518,11 +528,12 @@ class LLMExtractor:
             str: The result of processing the next conversation item.
         """
         selected_choice = data["choice"]
-        
-        
-        assert (isinstance(self.__current_item, ChoiceItemBase))
-        
-        self.__conversation_items = self.__current_item.get_items_for_choice(selected_choice)
+
+        assert isinstance(self.__current_item, ChoiceItemBase)
+
+        self.__conversation_items = self.__current_item.get_items_for_choice(
+            selected_choice
+        )
         self.__current_item = self.__conversation_items.pop(0)
         return self.__process_conversation_items(data["input"], is_recursive=True)
 
@@ -539,9 +550,9 @@ class LLMExtractor:
 
         self.status = ExtractionStatus.ABORTED
 
-        self.__conversation_items = copy.deepcopy(self.__conversation_config.paths[
-            "aborted"
-        ])
+        self.__conversation_items = copy.deepcopy(
+            self.__conversation_config.paths["aborted"]
+        )
         if len(self.__conversation_items) > 0:
             self.__current_item = self.__conversation_items.pop(0)
         else:
@@ -615,7 +626,7 @@ class LLMExtractor:
         Returns:
             None
         """
-        
+
         if not isinstance(self.__current_item, ChoiceItemBase):
             return
 
@@ -748,9 +759,9 @@ class LLMExtractor:
         Returns:
             tuple: A tuple containing the responses (list), chat messages (list), and a boolean indicating if interaction is required (bool).
         """
-        self.__conversation_items = copy.deepcopy(self.__conversation_config.paths[
-            item.path
-        ])
+        self.__conversation_items = copy.deepcopy(
+            self.__conversation_config.paths[item.path]
+        )
 
         return [], [], False
 
@@ -927,7 +938,7 @@ class LLMExtractor:
             if selected_choice == "##ABORT##":
                 self.__extraction_aborted({})
 
-            assert (isinstance(self.__current_item, ChoiceItemBase))
+            assert isinstance(self.__current_item, ChoiceItemBase)
 
             self.__conversation_items = self.__current_item.get_items_for_choice(
                 selected_choice
@@ -1001,7 +1012,7 @@ class LLMExtractor:
 
         function = item.function
         choice = function(self.__conversation_state, self.__softphone)
-        
+
         self.__conversation_items = item.get_items_for_choice(choice)
 
         return [], [], False
