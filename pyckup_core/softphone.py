@@ -225,9 +225,11 @@ class Softphone:
 
                 # play back incoming audio buffer
                 iteration_has_played_audio = False
-                while not self.__external_incoming_buffer.empty(): # ensure that still incoming packages are caught as part of the same response
+                while (
+                    not self.__external_incoming_buffer.empty()
+                ):  # ensure that still incoming packages are caught as part of the same response
                     incoming_audio_chunks = []
-                    
+
                     # wait it bit to catch more backages -> reduces stuttering (but slightly increases response time)
                     if not iteration_has_played_audio:
                         time.sleep(0.2)
@@ -237,7 +239,7 @@ class Softphone:
                     while not self.__external_incoming_buffer.empty():
                         audio_chunk = self.__external_incoming_buffer.get()
                         incoming_audio_chunks.append(audio_chunk)
-                         
+
                     if incoming_audio_chunks:
                         if not self.__audio_output_lock.locked():
                             self.__audio_output_lock.acquire()
@@ -265,7 +267,8 @@ class Softphone:
                         for i in range(len(call_info.media)):
                             if (
                                 call_info.media[i].type == pj.PJMEDIA_TYPE_AUDIO
-                                and call_info.media[i].status == pj.PJSUA_CALL_MEDIA_ACTIVE
+                                and call_info.media[i].status
+                                == pj.PJSUA_CALL_MEDIA_ACTIVE
                             ):
                                 call_media = self.active_call.getAudioMedia(i)
                                 # use media player 2 for realtime conversation audio
@@ -278,7 +281,8 @@ class Softphone:
                                 # wait until done speaking or external interruption
                                 time_to_wait = incoming_audio_segment.duration_seconds
                                 while (
-                                    time_to_wait > 0 and not self.__interrupt_audio_output
+                                    time_to_wait > 0
+                                    and not self.__interrupt_audio_output
                                 ):
                                     time.sleep(0.2)
                                     time_to_wait -= 0.2
@@ -287,7 +291,7 @@ class Softphone:
                                 if self.__media_player_2:
                                     self.__media_player_2.stopTransmit(call_media)
                                     del self.__media_player_2
-                                    
+
                 # no more incoming packages
                 if self.__audio_output_lock.locked() and iteration_has_played_audio:
                     self.__audio_output_lock.release()
@@ -878,7 +882,7 @@ class Softphone:
             return
 
         self.stop_audio()
-        
+
         call_info = self.active_call.getInfo()
         for i in range(len(call_info.media)):
             if (
@@ -891,7 +895,7 @@ class Softphone:
             loop_mode = pj.PJMEDIA_FILE_LOOP if do_loop else pj.PJMEDIA_FILE_NO_LOOP
             self.__media_player_1.createPlayer(audio_file_path)
             self.__media_player_1.startTransmit(call_media)
-            
+
     def stop_audio(self) -> None:
         """
         Stop playing audio to the active call.
@@ -913,7 +917,6 @@ class Softphone:
             if self.__media_player_2:
                 self.__media_player_2.stopTransmit(call_media)
                 del self.__media_player_2
-                
 
     def listen(self) -> str:
         """

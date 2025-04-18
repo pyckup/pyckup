@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 import traceback
 import yaml
+from pyckup_core.conversation_config import ConversationConfig
 from pyckup_core.llm_extractor import LLMExtractor, ExtractionStatus
 from pyckup_core.call_logging import log_message, setup_log
 from pyckup_core.softphone import Softphone, SoftphoneGroup
@@ -42,20 +43,8 @@ class Pyckup:
         if self.db is not None:
             self.db.close()
 
-    def __read_conversation_config(self, config_path: str) -> Dict:
-        """
-        Read the conversation configuration from a YAML file.
 
-        Args:
-            config_path (str): The file path to the conversation configuration YAML file.
-
-        Returns:
-            Dict: The parsed conversation configuration.
-        """
-        with open(config_path, "r") as config_file:
-            return yaml.safe_load(config_file)
-
-    def setup_conversation(self, config_path: str) -> Tuple[Dict, str]:
+    def setup_conversation(self, conversation_config: ConversationConfig) -> str:
         """
         Get conversation config and title and, if database functionality is used, ensure tables exist.
 
@@ -65,16 +54,13 @@ class Pyckup:
         Returns:
             Tuple[Dict, str]: A tuple containing the conversation configuration dictionary and the conversation title string.
         """
-        conversation_config = self.__read_conversation_config(config_path)
 
-        conversation_title = (
-            conversation_config["conversation_title"].lower().replace(" ", "_")
-        )
+        conversation_title = conversation_config.title.lower().replace(" ", "_")
 
         if self.db is not None:
             # ensure that results table exists
             fields = ""
-            for path in conversation_config["conversation_paths"].values():
+            for path in conversation_config.paths.values():
                 for item in path:
                     if "title" in item:
                         fields += ",\n"
@@ -102,7 +88,7 @@ class Pyckup:
 
             self.db.commit()
 
-        return conversation_config, conversation_title
+        return conversation_title
 
     def __setup_db(self, db_path: Optional[str]) -> None:
         """
@@ -192,7 +178,7 @@ class Pyckup:
         }
 
     def get_contact_status(
-        self, contact_id: int, conversation_config_path: str
+        self, contact_id: int, conversation_config: ConversationConfig
     ) -> Optional[Dict]:
         """
         Retrieve the status of a contact for the previous calls using this conversation.
@@ -208,7 +194,7 @@ class Pyckup:
             print("Cannot get contact status: no database provided")
             return None
 
-        _, conversation_title = self.setup_conversation(conversation_config_path)
+        conversation_title = self.setup_conversation(conversation_config)
 
         cursor = self.db.cursor()
         cursor.execute(
@@ -228,7 +214,7 @@ class Pyckup:
     def __call_core_routine(
         self,
         softphone: Softphone,
-        conversation_config: Dict,
+        conversation_config: ConversationConfig,
         is_outgoing: bool,
         enable_logging: bool = True,
         contact_id: Optional[int] = None,
@@ -372,7 +358,7 @@ class Pyckup:
 
     def __perform_outgoing_call(
         self,
-        conversation_config_path: str,
+        conversation_config: ConversationConfig,
         phone_number: Optional[str] = None,
         contact_id: Optional[int] = None,
         enable_logging: bool = True,
@@ -395,9 +381,7 @@ class Pyckup:
             )
             return
 
-        conversation_config, conversation_title = self.setup_conversation(
-            conversation_config_path
-        )
+        conversation_title = self.setup_conversation(conversation_config)
 
         if contact_id and self.db is not None:
             contact = self.get_contact(contact_id)
@@ -449,7 +433,7 @@ class Pyckup:
     def call_number(
         self,
         phone_number: str,
-        conversation_config_path: str,
+        conversation_config: ConversationConfig,
         enable_logging: bool = True,
     ) -> None:
         """
@@ -465,7 +449,7 @@ class Pyckup:
             None
         """
         self.__perform_outgoing_call(
-            conversation_config_path,
+            conversation_config,
             phone_number=phone_number,
             enable_logging=enable_logging,
         )
@@ -473,7 +457,7 @@ class Pyckup:
     def call_contact(
         self,
         contact_id: int,
-        conversation_config_path: str,
+        conversation_config: ConversationConfig,
         enable_logging: bool = True,
     ) -> None:
         """
@@ -493,7 +477,7 @@ class Pyckup:
             return
 
         self.__perform_outgoing_call(
-            conversation_config_path,
+            conversation_config,
             contact_id=contact_id,
             enable_logging=enable_logging,
         )
@@ -501,7 +485,7 @@ class Pyckup:
     def call_numbers(
         self,
         phone_numbers: List[str],
-        conversation_config_path: str,
+        conversation_config: ConversationConfig,
         enable_logging: bool = True,
     ) -> None:
         """
@@ -517,12 +501,12 @@ class Pyckup:
         """
         for phone_number in phone_numbers:
             self.call_number(
-                phone_number, conversation_config_path, enable_logging=enable_logging
+                phone_number, conversation_config, enable_logging=enable_logging
             )
 
     def call_contacts(
         self,
-        conversation_config_path: str,
+        conversation_config: ConversationConfig,
         contact_ids: Optional[List[int]] = None,
         maximum_attempts: Optional[int] = None,
     ) -> None:
@@ -561,11 +545,11 @@ class Pyckup:
                 print(f"Invalid contact id: {contact_id}")
                 continue
 
-            status = self.get_contact_status(contact_id, conversation_config_path)
+            status = self.get_contact_status(contact_id, conversation_config)
 
             if status is None:
                 # this is the first call, always should be made
-                self.call_contact(contact_id, conversation_config_path)
+                self.call_contact(contact_id, conversation_config)
                 continue
 
             if status["status"] != "NOT_REACHED":
@@ -576,13 +560,13 @@ class Pyckup:
                 print(f"Contact {contact_id} has reached maximum number of attempts.")
                 continue
 
-            self.call_contact(contact_id, conversation_config_path)
+            self.call_contact(contact_id, conversation_config)
 
     def __softphone_listen(
         self,
         sf: Softphone,
         sf_group: SoftphoneGroup,
-        incoming_conversation_config: Dict,
+        incoming_conversation_config: ConversationConfig,
         enable_logging: bool = True,
     ) -> None:
         """
@@ -633,7 +617,7 @@ class Pyckup:
 
     def start_listening(
         self,
-        conversation_config_path: str,
+        conversation_config: ConversationConfig,
         num_devices: int = 1,
         enable_logging: bool = True,
     ) -> SoftphoneGroup:
@@ -648,9 +632,6 @@ class Pyckup:
         Returns:
             SoftphoneGroup: The group of softphones that are listening for incoming calls.
         """
-        conversation_config, conversation_title = self.setup_conversation(
-            conversation_config_path
-        )
 
         sf_group = SoftphoneGroup(self.__sip_credentials_path)
         for i in range(int(num_devices)):

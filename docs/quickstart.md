@@ -23,8 +23,26 @@ Replace the placeholder values with the actual ones from your SIP account.
 
 ## Setup conversation config
 
-The conversation config is the heart of your Pyckup application and contains a blueprint of each user conversation that is followed by the AI agent. It is composed of multiple conversation items, that respresent different actions the agent can perform. You can create a `hello_world_config.yaml`:
+The conversation config is the heart of your Pyckup application and contains a blueprint of each user conversation that is followed by the AI agent. It is composed of multiple conversation items, that respresent different actions the agent can perform.  
+You can create a new ConversationConfig like this:
 
+```python
+from pyckup_core.conversation_config import ConversationConfig, ReadItem
+
+config = ConversationConfig(
+    title="Hello World Demo",
+    paths={
+        "entry": [
+            ReadItem(
+                text="Hello World"
+            ),
+        ],
+        "aborted": []    
+    }
+)
+```
+
+You can also specify the values in a `hello_world_config.yaml` and later parse it to a ConversationConfig:
 ```yaml
 conversation_title: Hello World Demo
 conversation_paths:
@@ -45,7 +63,7 @@ from pyckup_core.pyckup import Pyckup
 
 pu = Pyckup("sip_credentials.json")
 
-grp = pu.start_listening("hello_world_config.yaml")
+grp = pu.start_listening(ConversationConfig.from_yaml("hello_world_config.yaml"))
 # calls can be recieved during this time
 input()
 pu.stop_listening(grp)

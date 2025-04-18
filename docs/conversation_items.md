@@ -1,6 +1,6 @@
 # Conversation Items
 
-Each conversation is comprised of paths, that are in turn lists of conversation items. At the start of each conversation, the `entry` path will be executed, meaning each conversation item in this path will be handled from top to bottom. If the user indicates that they want to quit the conversation, the `abort` path is called automatically. You can define new paths and call them through the `path` conversation item.
+Each conversation is comprised of paths, that are in turn lists of conversation items. At the start of each conversation, the `entry` path will be executed, meaning each conversation item in this path will be handled from top to bottom. If the user indicates that they want to quit the conversation, the `abort` path is called automatically. You can define new paths and call them through the `path` conversation item. Conversation configs can be directly created as an instance of the ConversationConfig class or be parsed from a yaml file using ConversationConfig.from_yaml().
 
 ## Read
 ```yaml
