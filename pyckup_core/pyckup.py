@@ -43,18 +43,6 @@ class Pyckup:
         if self.db is not None:
             self.db.close()
 
-    # def __read_conversation_config(self, config_path: str) -> Dict:
-    #     """
-    #     Read the conversation configuration from a YAML file.
-
-    #     Args:
-    #         config_path (str): The file path to the conversation configuration YAML file.
-
-    #     Returns:
-    #         Dict: The parsed conversation configuration.
-    #     """
-    #     with open(config_path, "r") as config_file:
-    #         return yaml.safe_load(config_file)
 
     def setup_conversation(self, conversation_config: ConversationConfig) -> str:
         """
