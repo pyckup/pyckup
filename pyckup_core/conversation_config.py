@@ -1,5 +1,7 @@
+import importlib
 from typing import Any, Callable, Dict, List
 from pydantic import BaseModel
+import yaml
 
 from pyckup_core.softphone import Softphone
 
@@ -72,5 +74,58 @@ class ConversationConfig(BaseModel):
     paths: dict[str, List[ConversationItem]]
     
     @classmethod
+    def _parse_items(cls, items: List[Dict[str, Any]]) -> List[ConversationItem]:
+        """
+        Parse the items in the conversation config file.
+
+        Args:
+            items (list): The list of items to parse.
+
+        Returns:
+            list: The parsed conversation items.
+        """
+        type_mapping = {
+            "read": ReadItem,
+            "prompt": PromptItem,
+            "choice": ChoiceItem,
+            "information": InformationItem,
+            "function": FunctionItem,
+            "function_choice": FunctionChoiceItem,
+            "path": PathItem
+        }
+        
+        parsed_items = []
+        for item in items:
+            # recursively parse items
+            if item["type"] == "choice" or item["type"] == "function_choice":
+                for option in item["options"]:
+                    option["items"] = cls._parse_items(option["items"])
+            
+            # set function   
+            if item["type"] == "function" or item["type"] == "function_choice":
+                module = importlib.import_module(item["module"])
+                item['function'] = getattr(module, item["function"])
+                item.pop("module")
+            
+            item_type = type_mapping.get(item["type"])
+            if item_type:
+                parsed_items.append(item_type(**item))
+            else:
+                raise ValueError(f"Unknown item type: {item['type']}")
+            
+        return parsed_items
+
+    
+    @classmethod
     def from_yaml(cls, path: str) -> 'ConversationConfig':
-        pass
+        with open(path, "r") as config_file:
+            config_dict = yaml.safe_load(config_file)
+            
+        paths = {}
+        for path in config_dict['conversation_paths'].items():
+            paths[path[0]] = cls._parse_items(path[1])
+        
+        return cls(
+            title=config_dict['conversation_title'],
+            paths=paths
+        )
