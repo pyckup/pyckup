@@ -78,7 +78,7 @@ class PathItem(ConversationItem):
 class ConversationConfig(BaseModel):
     title: str
     paths: dict[str, List[ConversationItem]]
-
+    
     @classmethod
     def _parse_items(cls, items: List[Dict[str, Any]]) -> List[ConversationItem]:
         """
@@ -97,37 +97,41 @@ class ConversationConfig(BaseModel):
             "information": InformationItem,
             "function": FunctionItem,
             "function_choice": FunctionChoiceItem,
-            "path": PathItem,
+            "path": PathItem
         }
-
+        
         parsed_items = []
         for item in items:
             # recursively parse items
             if item["type"] == "choice" or item["type"] == "function_choice":
                 for option in item["options"]:
                     option["items"] = cls._parse_items(option["items"])
-
-            # set function
+            
+            # set function   
             if item["type"] == "function" or item["type"] == "function_choice":
                 module = importlib.import_module(item["module"])
-                item["function"] = getattr(module, item["function"])
+                item['function'] = getattr(module, item["function"])
                 item.pop("module")
-
+            
             item_type = type_mapping.get(item["type"])
             if item_type:
                 parsed_items.append(item_type(**item))
             else:
                 raise ValueError(f"Unknown item type: {item['type']}")
-
+            
         return parsed_items
 
+    
     @classmethod
-    def from_yaml(cls, path: str) -> "ConversationConfig":
+    def from_yaml(cls, path: str) -> 'ConversationConfig':
         with open(path, "r") as config_file:
             config_dict = yaml.safe_load(config_file)
-
+            
         paths = {}
-        for path in config_dict["conversation_paths"].items():
+        for path in config_dict['conversation_paths'].items():
             paths[path[0]] = cls._parse_items(path[1])
-
-        return cls(title=config_dict["conversation_title"], paths=paths)
+        
+        return cls(
+            title=config_dict['conversation_title'],
+            paths=paths
+        )
