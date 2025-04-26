@@ -207,6 +207,26 @@ class Softphone:
                     print(
                         f"An error occurred while trying to delete the file {artifact}: {e}"
                     )
+            
+    def __get_call_medium(self) -> Optional[pj.AudioMedia]:
+        """
+        Get the audio media associated with the active call.
+
+        Returns:
+            AudioMedia: The audio media associated with the active call.
+        """
+        if not self.active_call:
+            return None
+
+        call_info = self.active_call.getInfo()
+        for i in range(len(call_info.media)):
+            if (
+                call_info.media[i].type == pj.PJMEDIA_TYPE_AUDIO
+                and call_info.media[i].status == pj.PJSUA_CALL_MEDIA_ACTIVE
+            ):
+                return self.active_call.getAudioMedia(i)
+        return None
+    
 
     def __external_incoming_buffer_loop(self) -> None:
         """
@@ -263,34 +283,30 @@ class Softphone:
                         )
                         incoming_audio_segment.export(incoming_audio_path, format="wav")
 
-                        call_info = self.active_call.getInfo()
-                        for i in range(len(call_info.media)):
-                            if (
-                                call_info.media[i].type == pj.PJMEDIA_TYPE_AUDIO
-                                and call_info.media[i].status
-                                == pj.PJSUA_CALL_MEDIA_ACTIVE
-                            ):
-                                call_media = self.active_call.getAudioMedia(i)
-                                # use media player 2 for realtime conversation audio
-                                self.__media_player_2 = pj.AudioMediaPlayer()
-                                self.__media_player_2.createPlayer(
-                                    incoming_audio_path, pj.PJMEDIA_FILE_NO_LOOP
-                                )
-                                self.__media_player_2.startTransmit(call_media)
+                        call_medium = self.__get_call_medium()
+                        if not call_medium:
+                            self.__audio_output_lock.release()
+                            return
+                        # use media player 2 for realtime conversation audio
+                        self.__media_player_2 = pj.AudioMediaPlayer()
+                        self.__media_player_2.createPlayer(
+                            incoming_audio_path, pj.PJMEDIA_FILE_NO_LOOP
+                        )
+                        self.__media_player_2.startTransmit(call_medium)
 
-                                # wait until done speaking or external interruption
-                                time_to_wait = incoming_audio_segment.duration_seconds
-                                while (
-                                    time_to_wait > 0
-                                    and not self.__interrupt_audio_output
-                                ):
-                                    time.sleep(0.2)
-                                    time_to_wait -= 0.2
-                                self.__interrupt_audio_output = False
+                        # wait until done speaking or external interruption
+                        time_to_wait = incoming_audio_segment.duration_seconds
+                        while (
+                            time_to_wait > 0
+                            and not self.__interrupt_audio_output
+                        ):
+                            time.sleep(0.2)
+                            time_to_wait -= 0.2
+                        self.__interrupt_audio_output = False
 
-                                if self.__media_player_2:
-                                    self.__media_player_2.stopTransmit(call_media)
-                                    del self.__media_player_2
+                        if self.__media_player_2:
+                            self.__media_player_2.stopTransmit(call_medium)
+                            del self.__media_player_2
 
                 # no more incoming packages
                 if self.__audio_output_lock.locked() and iteration_has_played_audio:
@@ -659,209 +675,204 @@ class Softphone:
         while self.__prioritize_external_audio:
             time.sleep(0.2)
 
+        call_medium = self.__get_call_medium()
+        if not call_medium:
+            print("Can't say: No call media available.")
+            return
+        
         # wait for incoming buffer to finish playing
         self.__audio_output_lock.acquire()
+        
+        # -- Scan for cached audio file --
+        message_hash = self.__get_message_hash(message)
+        cached_audio_path = os.path.join(
+            HERE / "../cache", f"{message_hash}.wav"
+        )
+        if os.path.isfile(cached_audio_path):
+            if self.__media_player_1:
+                self.__media_player_1.stopTransmit(call_medium)
+            if self.__media_player_2:
+                self.__media_player_2.stopTransmit(call_medium)
 
-        # Setup audio media
-        call_info = self.active_call.getInfo()
-        for i in range(len(call_info.media)):
-            if (
-                call_info.media[i].type == pj.PJMEDIA_TYPE_AUDIO
-                and call_info.media[i].status == pj.PJSUA_CALL_MEDIA_ACTIVE
-            ):
-                call_media = self.active_call.getAudioMedia(i)
+            cached_audio = AudioSegment.from_wav(str(cached_audio_path))
+            self.__media_player_1 = pj.AudioMediaPlayer()
+            self.__media_player_1.createPlayer(
+                str(cached_audio_path), pj.PJMEDIA_FILE_NO_LOOP
+            )
+            self.__media_player_1.startTransmit(call_medium)
 
-                # -- Scan for cached audio file --
-                message_hash = self.__get_message_hash(message)
-                cached_audio_path = os.path.join(
-                    HERE / "../cache", f"{message_hash}.wav"
-                )
-                if os.path.isfile(cached_audio_path):
-                    if self.__media_player_1:
-                        self.__media_player_1.stopTransmit(call_media)
-                    if self.__media_player_2:
-                        self.__media_player_2.stopTransmit(call_media)
+            time.sleep(cached_audio.duration_seconds)
 
-                    cached_audio = AudioSegment.from_wav(str(cached_audio_path))
-                    self.__media_player_1 = pj.AudioMediaPlayer()
-                    self.__media_player_1.createPlayer(
-                        str(cached_audio_path), pj.PJMEDIA_FILE_NO_LOOP
-                    )
-                    self.__media_player_1.startTransmit(call_media)
+            if self.__media_player_1:
+                self.__media_player_1.stopTransmit(call_medium)
+            self.__audio_output_lock.release()
+            return
 
-                    time.sleep(cached_audio.duration_seconds)
+        # -- Recieve TTS audio from OpenAI and stream it using double buffering --
+        # Setup buffer files
+        try:
+            silence = np.zeros(1024, dtype=np.int16).tobytes()
+            with wave.open(
+                str(HERE / f"../artifacts/{self.__id}_outgoing_buffer_0.wav"),
+                "wb",
+            ) as buffer_0:
+                buffer_0.setnchannels(self.__config["tts_channels"])
+                buffer_0.setsampwidth(self.__config["tts_sample_width"])
+                buffer_0.setframerate(self.__config["tts_sample_rate"])
+                buffer_0.writeframes(silence)
 
-                    if self.__media_player_1:
-                        self.__media_player_1.stopTransmit(call_media)
-                    self.__audio_output_lock.release()
-                    return
+            with wave.open(
+                str(HERE / f"../artifacts/{self.__id}_outgoing_buffer_1.wav"),
+                "wb",
+            ) as buffer_1:
+                buffer_1.setnchannels(self.__config["tts_channels"])
+                buffer_1.setsampwidth(self.__config["tts_sample_width"])
+                buffer_1.setframerate(self.__config["tts_sample_rate"])
+                buffer_1.writeframes(silence)
 
-                # -- Recieve TTS audio from OpenAI and stream it using double buffering --
-                # Setup buffer files
-                try:
-                    silence = np.zeros(1024, dtype=np.int16).tobytes()
-                    with wave.open(
-                        str(HERE / f"../artifacts/{self.__id}_outgoing_buffer_0.wav"),
-                        "wb",
-                    ) as buffer_0:
-                        buffer_0.setnchannels(self.__config["tts_channels"])
-                        buffer_0.setsampwidth(self.__config["tts_sample_width"])
-                        buffer_0.setframerate(self.__config["tts_sample_rate"])
-                        buffer_0.writeframes(silence)
+            # stream and play response to/from alternating buffer
+            delay = self.__config["tts_chunk_size"] / (
+                self.__config["tts_sample_rate"]
+                * self.__config["tts_sample_width"]
+                * self.__config["tts_channels"]
+            )  # length of each chunk in seconds
 
-                    with wave.open(
-                        str(HERE / f"../artifacts/{self.__id}_outgoing_buffer_1.wav"),
-                        "wb",
-                    ) as buffer_1:
-                        buffer_1.setnchannels(self.__config["tts_channels"])
-                        buffer_1.setsampwidth(self.__config["tts_sample_width"])
-                        buffer_1.setframerate(self.__config["tts_sample_rate"])
-                        buffer_1.writeframes(silence)
+            combined_audio = AudioSegment.empty()
 
-                    # stream and play response to/from alternating buffer
-                    delay = self.__config["tts_chunk_size"] / (
-                        self.__config["tts_sample_rate"]
-                        * self.__config["tts_sample_width"]
-                        * self.__config["tts_channels"]
-                    )  # length of each chunk in seconds
+            with self.__openai_client.audio.speech.with_streaming_response.create(
+                model="tts-1",
+                voice="alloy",
+                input=message,
+                response_format="pcm",
+            ) as response:
+                buffer_switch = True
+                for chunk in response.iter_bytes(
+                    chunk_size=self.__config["tts_chunk_size"]
+                ):
+                    if chunk and len(chunk) >= 512:
+                        if buffer_switch:
+                            buffer_switch = False
+                            # play audio from buffer 0
+                            if self.__media_player_2:
+                                self.__media_player_2.stopTransmit(call_medium)
+                            self.__media_player_1 = pj.AudioMediaPlayer()
+                            self.__media_player_1.createPlayer(
+                                str(
+                                    HERE
+                                    / f"../artifacts/{self.__id}_outgoing_buffer_0.wav"
+                                ),
+                                pj.PJMEDIA_FILE_NO_LOOP,
+                            )
+                            self.__media_player_1.startTransmit(call_medium)
 
-                    combined_audio = AudioSegment.empty()
+                            # append buffer audio to combined audio
+                            buffered_audio = AudioSegment.from_wav(
+                                str(
+                                    HERE
+                                    / f"../artifacts/{self.__id}_outgoing_buffer_0.wav"
+                                )
+                            )
+                            combined_audio += buffered_audio
 
-                    with self.__openai_client.audio.speech.with_streaming_response.create(
-                        model="tts-1",
-                        voice="alloy",
-                        input=message,
-                        response_format="pcm",
-                    ) as response:
-                        buffer_switch = True
-                        for chunk in response.iter_bytes(
-                            chunk_size=self.__config["tts_chunk_size"]
-                        ):
-                            if chunk and len(chunk) >= 512:
-                                if buffer_switch:
-                                    buffer_switch = False
-                                    # play audio from buffer 0
-                                    if self.__media_player_2:
-                                        self.__media_player_2.stopTransmit(call_media)
-                                    self.__media_player_1 = pj.AudioMediaPlayer()
-                                    self.__media_player_1.createPlayer(
-                                        str(
-                                            HERE
-                                            / f"../artifacts/{self.__id}_outgoing_buffer_0.wav"
-                                        ),
-                                        pj.PJMEDIA_FILE_NO_LOOP,
-                                    )
-                                    self.__media_player_1.startTransmit(call_media)
+                            # write audio to buffer 1
+                            with wave.open(
+                                str(
+                                    HERE
+                                    / f"../artifacts/{self.__id}_outgoing_buffer_1.wav"
+                                ),
+                                "wb",
+                            ) as buffer_1:
+                                buffer_1.setnchannels(
+                                    self.__config["tts_channels"]
+                                )
+                                buffer_1.setsampwidth(
+                                    self.__config["tts_sample_width"]
+                                )
+                                buffer_1.setframerate(
+                                    self.__config["tts_sample_rate"]
+                                )
+                                buffer_1.writeframes(chunk)
+                                time.sleep(delay)
+                        else:
+                            buffer_switch = True
+                            # play audio from buffer 1
+                            if self.__media_player_1:
+                                self.__media_player_1.stopTransmit(call_medium)
+                            self.__media_player_2 = pj.AudioMediaPlayer()
+                            self.__media_player_2.createPlayer(
+                                str(
+                                    HERE
+                                    / f"../artifacts/{self.__id}_outgoing_buffer_1.wav"
+                                ),
+                                pj.PJMEDIA_FILE_NO_LOOP,
+                            )
+                            self.__media_player_2.startTransmit(call_medium)
 
-                                    # append buffer audio to combined audio
-                                    buffered_audio = AudioSegment.from_wav(
-                                        str(
-                                            HERE
-                                            / f"../artifacts/{self.__id}_outgoing_buffer_0.wav"
-                                        )
-                                    )
-                                    combined_audio += buffered_audio
+                            # append buffer audio to combined audio
+                            buffered_audio = AudioSegment.from_wav(
+                                str(
+                                    HERE
+                                    / f"../artifacts/{self.__id}_outgoing_buffer_1.wav"
+                                )
+                            )
+                            combined_audio += buffered_audio
 
-                                    # write audio to buffer 1
-                                    with wave.open(
-                                        str(
-                                            HERE
-                                            / f"../artifacts/{self.__id}_outgoing_buffer_1.wav"
-                                        ),
-                                        "wb",
-                                    ) as buffer_1:
-                                        buffer_1.setnchannels(
-                                            self.__config["tts_channels"]
-                                        )
-                                        buffer_1.setsampwidth(
-                                            self.__config["tts_sample_width"]
-                                        )
-                                        buffer_1.setframerate(
-                                            self.__config["tts_sample_rate"]
-                                        )
-                                        buffer_1.writeframes(chunk)
-                                        time.sleep(delay)
-                                else:
-                                    buffer_switch = True
-                                    # play audio from buffer 1
-                                    if self.__media_player_1:
-                                        self.__media_player_1.stopTransmit(call_media)
-                                    self.__media_player_2 = pj.AudioMediaPlayer()
-                                    self.__media_player_2.createPlayer(
-                                        str(
-                                            HERE
-                                            / f"../artifacts/{self.__id}_outgoing_buffer_1.wav"
-                                        ),
-                                        pj.PJMEDIA_FILE_NO_LOOP,
-                                    )
-                                    self.__media_player_2.startTransmit(call_media)
+                            # write audio to buffer 0
+                            with wave.open(
+                                str(
+                                    HERE
+                                    / f"../artifacts/{self.__id}_outgoing_buffer_0.wav"
+                                ),
+                                "wb",
+                            ) as buffer_0:
+                                buffer_0.setnchannels(
+                                    self.__config["tts_channels"]
+                                )
+                                buffer_0.setsampwidth(
+                                    self.__config["tts_sample_width"]
+                                )
+                                buffer_0.setframerate(
+                                    self.__config["tts_sample_rate"]
+                                )
+                                buffer_0.writeframes(chunk)
+                                time.sleep(delay)
 
-                                    # append buffer audio to combined audio
-                                    buffered_audio = AudioSegment.from_wav(
-                                        str(
-                                            HERE
-                                            / f"../artifacts/{self.__id}_outgoing_buffer_1.wav"
-                                        )
-                                    )
-                                    combined_audio += buffered_audio
+                # save cache file
+                if cache_audio:
+                    combined_audio.export(str(cached_audio_path), format="wav")
 
-                                    # write audio to buffer 0
-                                    with wave.open(
-                                        str(
-                                            HERE
-                                            / f"../artifacts/{self.__id}_outgoing_buffer_0.wav"
-                                        ),
-                                        "wb",
-                                    ) as buffer_0:
-                                        buffer_0.setnchannels(
-                                            self.__config["tts_channels"]
-                                        )
-                                        buffer_0.setsampwidth(
-                                            self.__config["tts_sample_width"]
-                                        )
-                                        buffer_0.setframerate(
-                                            self.__config["tts_sample_rate"]
-                                        )
-                                        buffer_0.writeframes(chunk)
-                                        time.sleep(delay)
+                time.sleep(delay)
 
-                        # save cache file
-                        if cache_audio:
-                            combined_audio.export(str(cached_audio_path), format="wav")
-
-                        time.sleep(delay)
-
-                        self.__audio_output_lock.release()
-                        # play residue audio from last buffer
-                        # try:
-                        #     if buffer_switch:
-                        #         self.__media_player_2.stopTransmit(call_media)
-                        #         if self.__media_player_1:
-                        #                     self.__media_player_1.stopTransmit(call_media)
-                        #         self.__media_player_1 = pj.AudioMediaPlayer()
-                        #         self.__media_player_1.createPlayer(str(HERE / f"../artifacts/{self.__id}_outgoing_buffer_0.wav"), pj.PJMEDIA_FILE_NO_LOOP)
-                        #         self.__media_player_1.startTransmit(call_media)
-                        #         time.sleep(delay)
-                        #     else:
-                        #         self.__media_player_1.stopTransmit(call_media)
-                        #         if self.__media_player_2:
-                        #                     self.__media_player_2.stopTransmit(call_media)
-                        #         self.__media_player_2 = pj.AudioMediaPlayer()
-                        #         self.__media_player_2.createPlayer(str(HERE / f"../artifacts/{self.__id}_outgoing_buffer_1.wav"), pj.PJMEDIA_FILE_NO_LOOP)
-                        #         self.__media_player_2.startTransmit(call_media)
-                        #         time.sleep(delay)
-                        # except Exception as e:
-                        #     print('Error when playing residue audio buffer', e)
-                        #     traceback.print_exc()
-                except Exception as e:
-                    print(
-                        "Error occured while speaking (probably because user hung up):",
-                        e,
-                    )
-                    traceback.print_exc()
-                    self.__audio_output_lock.release()
-                return
-        print("No available audio media")
+                self.__audio_output_lock.release()
+                # play residue audio from last buffer
+                # try:
+                #     if buffer_switch:
+                #         self.__media_player_2.stopTransmit(call_media)
+                #         if self.__media_player_1:
+                #                     self.__media_player_1.stopTransmit(call_media)
+                #         self.__media_player_1 = pj.AudioMediaPlayer()
+                #         self.__media_player_1.createPlayer(str(HERE / f"../artifacts/{self.__id}_outgoing_buffer_0.wav"), pj.PJMEDIA_FILE_NO_LOOP)
+                #         self.__media_player_1.startTransmit(call_media)
+                #         time.sleep(delay)
+                #     else:
+                #         self.__media_player_1.stopTransmit(call_media)
+                #         if self.__media_player_2:
+                #                     self.__media_player_2.stopTransmit(call_media)
+                #         self.__media_player_2 = pj.AudioMediaPlayer()
+                #         self.__media_player_2.createPlayer(str(HERE / f"../artifacts/{self.__id}_outgoing_buffer_1.wav"), pj.PJMEDIA_FILE_NO_LOOP)
+                #         self.__media_player_2.startTransmit(call_media)
+                #         time.sleep(delay)
+                # except Exception as e:
+                #     print('Error when playing residue audio buffer', e)
+                #     traceback.print_exc()
+        except Exception as e:
+            print(
+                "Error occured while speaking (probably because user hung up):",
+                e,
+            )
+            traceback.print_exc()
+            self.__audio_output_lock.release()
+        return
 
     def play_audio(self, audio_file_path: str, do_loop: bool = False) -> None:
         """
@@ -883,18 +894,16 @@ class Softphone:
 
         self.stop_audio()
 
-        call_info = self.active_call.getInfo()
-        for i in range(len(call_info.media)):
-            if (
-                call_info.media[i].type == pj.PJMEDIA_TYPE_AUDIO
-                and call_info.media[i].status == pj.PJSUA_CALL_MEDIA_ACTIVE
-            ):
-                call_media = self.active_call.getAudioMedia(i)
-
-            self.__media_player_1 = pj.AudioMediaPlayer()
-            loop_mode = pj.PJMEDIA_FILE_LOOP if do_loop else pj.PJMEDIA_FILE_NO_LOOP
-            self.__media_player_1.createPlayer(audio_file_path)
-            self.__media_player_1.startTransmit(call_media)
+        
+        call_medium = self.__get_call_medium()
+        if not call_medium:
+            print("Can't play audio: No call media available.")
+            return
+        
+        self.__media_player_1 = pj.AudioMediaPlayer()
+        loop_mode = pj.PJMEDIA_FILE_LOOP if do_loop else pj.PJMEDIA_FILE_NO_LOOP
+        self.__media_player_1.createPlayer(audio_file_path)
+        self.__media_player_1.startTransmit(call_medium)
 
     def stop_audio(self) -> None:
         """
@@ -903,20 +912,18 @@ class Softphone:
         Returns:
             None
         """
-        call_info = self.active_call.getInfo()
-        for i in range(len(call_info.media)):
-            if (
-                call_info.media[i].type == pj.PJMEDIA_TYPE_AUDIO
-                and call_info.media[i].status == pj.PJSUA_CALL_MEDIA_ACTIVE
-            ):
-                call_media = self.active_call.getAudioMedia(i)
-
-            if self.__media_player_1:
-                self.__media_player_1.stopTransmit(call_media)
-                del self.__media_player_1
-            if self.__media_player_2:
-                self.__media_player_2.stopTransmit(call_media)
-                del self.__media_player_2
+        
+        call_medium = self.__get_call_medium()
+        if not call_medium:
+            print("Can't stop audio: No call media available.")
+            return
+        
+        if self.__media_player_1:
+            self.__media_player_1.stopTransmit(call_medium)
+            del self.__media_player_1
+        if self.__media_player_2:
+            self.__media_player_2.stopTransmit(call_medium)
+            del self.__media_player_2
 
     def listen(self) -> str:
         """
@@ -967,44 +974,37 @@ class Softphone:
         Returns:
             bool: True if the recording was successful, False otherwise.
         """
-        waited_on_media = 0
-        while waited_on_media < unavailable_media_timeout:
-            call_info = self.active_call.getInfo()
-            for i in range(len(call_info.media)):
-                if (
-                    call_info.media[i].type == pj.PJMEDIA_TYPE_AUDIO
-                    and call_info.media[i].status == pj.PJSUA_CALL_MEDIA_ACTIVE
-                ):
-                    call_media = self.active_call.getAudioMedia(i)
+        waited_on_medium = 0
+        while waited_on_medium < unavailable_media_timeout:
+            call_medium = self.__get_call_medium()
+            if call_medium:
+                self.__media_recorder = pj.AudioMediaRecorder()
+                self.__media_recorder.createRecorder(
+                    str(HERE / f"../artifacts/{self.__id}_incoming.wav")
+                )
+                call_medium.startTransmit(self.__media_recorder)
+                time.sleep(duration)
 
-                    self.__media_recorder = pj.AudioMediaRecorder()
-                    self.__media_recorder.createRecorder(
-                        str(HERE / f"../artifacts/{self.__id}_incoming.wav")
-                    )
-                    call_media.startTransmit(self.__media_recorder)
-                    time.sleep(duration)
+                # call was terminated while recording.
+                if not self.__media_recorder or not self.active_call:
+                    return False
 
-                    # call was terminated while recording.
-                    if not self.__media_recorder or not self.active_call:
-                        return False
+                # call media no longer active. probably holding. Wait for media.
+                if not call_medium.status == pj.PJSUA_CALL_MEDIA_ACTIVE:
+                    call_medium.stopTransmit(self.__media_recorder)
+                    time.sleep(1)
+                    waited_on_medium += 1
+                    continue
 
-                    # call media no longer active. probably holding. Wait for media.
-                    call_info = self.active_call.getInfo()
-                    if not call_info.media[i].status == pj.PJSUA_CALL_MEDIA_ACTIVE:
-                        call_media.stopTransmit(self.__media_recorder)
-                        time.sleep(1)
-                        waited_on_media += 1
-                        continue
-
-                    # recorded successfully
-                    call_media.stopTransmit(self.__media_recorder)
-                    del self.__media_recorder
-                    return True
-
-            # no available call media. probably holding. Wait for media.
-            time.sleep(1)
-            waited_on_media += 1
-            continue
+                # recorded successfully
+                call_medium.stopTransmit(self.__media_recorder)
+                del self.__media_recorder
+                return True
+            else:
+                # no available call media. probably holding. Wait for media.
+                time.sleep(1)
+                waited_on_medium += 1
+                continue
 
         return False
 

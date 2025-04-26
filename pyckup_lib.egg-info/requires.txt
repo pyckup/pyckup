@@ -1,0 +1,10 @@
+langchain-community
+langchain-core
+langchain-openai
+numpy
+openai
+pathlib
+pydantic
+pydub
+pyyaml
+websocket-client
