@@ -136,6 +136,7 @@ class Softphone:
         self.__group.add_phone(self)
 
         self.__id = uuid.uuid4()
+        self.__incoming_audio_save_path = str(HERE / f"../artifacts/{self.__id}_incoming.wav")
         self.active_call = None
         self.__paired_call = None
 
@@ -151,9 +152,13 @@ class Softphone:
         self.__external_outgoing_buffer_thread = None
         self.__audio_output_lock = (
             threading.Lock()
-        )  # determines, which thread can use softphone for output
+        )  # determines, which thread uses softphone for output
         self.__prioritize_external_audio = False  # True if next the next external message should be played before internal (say)
         self.__interrupt_audio_output = False  # set to True to interrupt audio output (eg. when user starts speaking)
+        
+        self.__audio_input_lock = threading.Lock()  # determines, which thread currently records audio from this softphone
+        self.__audio_input_priority_thread = None  # thread that has priority to currently record audio
+
 
         # Initialize OpenAI
         self.__openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
@@ -924,6 +929,54 @@ class Softphone:
         if self.__media_player_2:
             self.__media_player_2.stopTransmit(call_medium)
             del self.__media_player_2
+            
+    def record_audio(self, output_path: str, vad: Optional[bool] = False, duration: Optional[float] = None) -> bool:
+        """
+        Record audio from the active call for a specified duration and save it as an artifact WAVE file.
+
+        Args:
+            output_path (str): The file path to save the recorded audio.
+            vad (bool, optional): If True, uses Voice Activity Detection to skip silence. Defaults to False.
+            duration (float, optional): The duration in seconds to record the audio. Defaults to 5.0.
+
+        Returns:
+            bool: True if the recording was successful, False otherwise.
+        """
+        if not self.active_call:
+            print("Can't record audio: No call in progress.")
+            return False
+        
+        # user-called recording should always have priority over worker threads
+        self.__audio_input_priority_thread = threading.current_thread()
+        
+        if vad:
+            if not self.__skip_silence():
+                self.__audio_input_priority_thread = None
+                return False
+            recording_successful, recorded_audio = self.__record_while_not_silent()
+            if not recording_successful:
+                self.__audio_input_priority_thread = None
+                return False
+            
+            recorded_audio.export(
+                output_path, format="wav"
+            )
+            self.__audio_input_priority_thread = None
+            return True
+        elif duration:
+            if not self.__record_incoming_audio(
+                output_path=output_path,
+                duration=duration,            
+            ):
+                self.__audio_input_priority_thread = None
+                return False
+            self.__audio_input_priority_thread = None
+            return True
+        else:
+            raise ValueError("Either vad or duration must be specified.")
+
+
+        
 
     def listen(self) -> str:
         """
@@ -962,31 +1015,38 @@ class Softphone:
         return transcription.text
 
     def __record_incoming_audio(
-        self, duration: float = 1.0, unavailable_media_timeout: int = 60
+        self, output_path: str, duration: float = 1.0, unavailable_media_timeout: int = 60
     ) -> bool:
         """
         Record incoming audio from the active call for a specified duration and save it as an artifact WAVE file.
 
         Args:
+            output_path (str): The file path to save the recorded audio.
             duration (float, optional): The duration in seconds to record the audio. Defaults to 1.0.
             unavailable_media_timeout (int, optional): The timeout in seconds to wait if call media becomes unavailable (eg. due to holding the call). Defaults to 60.
 
         Returns:
             bool: True if the recording was successful, False otherwise.
         """
+        # wait for priority thread to stop recording
+        while self.__audio_input_priority_thread is not None and self.__audio_input_priority_thread != threading.current_thread():
+            time.sleep(0.2)
+        
+        self.__audio_input_lock.acquire()
         waited_on_medium = 0
         while waited_on_medium < unavailable_media_timeout:
             call_medium = self.__get_call_medium()
             if call_medium:
                 self.__media_recorder = pj.AudioMediaRecorder()
                 self.__media_recorder.createRecorder(
-                    str(HERE / f"../artifacts/{self.__id}_incoming.wav")
+                    output_path
                 )
                 call_medium.startTransmit(self.__media_recorder)
                 time.sleep(duration)
 
                 # call was terminated while recording.
                 if not self.__media_recorder or not self.active_call:
+                    self.__audio_input_lock.release()
                     return False
 
                 # call media no longer active. probably holding. Wait for media.
@@ -999,6 +1059,7 @@ class Softphone:
                 # recorded successfully
                 call_medium.stopTransmit(self.__media_recorder)
                 del self.__media_recorder
+                self.__audio_input_lock.release()
                 return True
             else:
                 # no available call media. probably holding. Wait for media.
@@ -1006,6 +1067,7 @@ class Softphone:
                 waited_on_medium += 1
                 continue
 
+        self.__audio_input_lock.release()
         return False
 
     def __skip_silence(self) -> bool:
@@ -1015,11 +1077,11 @@ class Softphone:
         Returns:
             bool: True if recording could be performed successfully, False otherwise.
         """
-        if not self.__record_incoming_audio(self.__config["silence_sample_interval"]):
+        if not self.__record_incoming_audio(output_path=self.__incoming_audio_save_path, duration=self.__config["silence_sample_interval"]):
             return False
 
         last_segment = AudioSegment.from_wav(
-            str(HERE / f"../artifacts/{self.__id}_incoming.wav")
+            self.__incoming_audio_save_path
         )
         while last_segment.dBFS < self.__config["silence_threshold"]:
 
@@ -1027,11 +1089,12 @@ class Softphone:
                 return ""
 
             if not self.__record_incoming_audio(
-                self.__config["silence_sample_interval"]
+                output_path=self.__incoming_audio_save_path,
+                duration=self.__config["silence_sample_interval"]
             ):
                 return False
             last_segment = AudioSegment.from_wav(
-                str(HERE / f"../artifacts/{self.__id}_incoming.wav")
+                self.__incoming_audio_save_path
             )
 
         return True
@@ -1044,9 +1107,9 @@ class Softphone:
             tuple: A tuple containing a boolean indicating if the recording was successful (bool) and the combined audio segments (AudioSegment).
         """
 
-        self.__record_incoming_audio(self.__config["silence_sample_interval"])
+        self.__record_incoming_audio(output_path=self.__incoming_audio_save_path, duration=self.__config["silence_sample_interval"])
         last_segment = AudioSegment.from_wav(
-            str(HERE / f"../artifacts/{self.__id}_incoming.wav")
+            self.__incoming_audio_save_path
         )
         combined_segments = last_segment
 
@@ -1061,11 +1124,12 @@ class Softphone:
                 return True, ""
 
             if not self.__record_incoming_audio(
-                self.__config["speaking_sample_interval"]
+                output_path=self.__incoming_audio_save_path,
+                duration=self.__config["speaking_sample_interval"]
             ):
                 return False, None
             last_segment = AudioSegment.from_wav(
-                str(HERE / f"../artifacts/{self.__id}_incoming.wav")
+                self.__incoming_audio_save_path
             )
             combined_segments += last_segment
 
