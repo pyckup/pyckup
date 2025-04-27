@@ -43,7 +43,6 @@ class Pyckup:
         if self.db is not None:
             self.db.close()
 
-
     def setup_conversation(self, conversation_config: ConversationConfig) -> str:
         """
         Get conversation config and title and, if database functionality is used, ensure tables exist.

@@ -136,7 +136,9 @@ class Softphone:
         self.__group.add_phone(self)
 
         self.__id = uuid.uuid4()
-        self.__incoming_audio_save_path = str(HERE / f"../artifacts/{self.__id}_incoming.wav")
+        self.__incoming_audio_save_path = str(
+            HERE / f"../artifacts/{self.__id}_incoming.wav"
+        )
         self.active_call = None
         self.__paired_call = None
 
@@ -155,10 +157,13 @@ class Softphone:
         )  # determines, which thread uses softphone for output
         self.__prioritize_external_audio = False  # True if next the next external message should be played before internal (say)
         self.__interrupt_audio_output = False  # set to True to interrupt audio output (eg. when user starts speaking)
-        
-        self.__audio_input_lock = threading.Lock()  # determines, which thread currently records audio from this softphone
-        self.__audio_input_priority_thread = None  # thread that has priority to currently record audio
 
+        self.__audio_input_lock = (
+            threading.Lock()
+        )  # determines, which thread currently records audio from this softphone
+        self.__audio_input_priority_thread = (
+            None  # thread that has priority to currently record audio
+        )
 
         # Initialize OpenAI
         self.__openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
@@ -212,7 +217,7 @@ class Softphone:
                     print(
                         f"An error occurred while trying to delete the file {artifact}: {e}"
                     )
-            
+
     def __get_call_medium(self) -> Optional[pj.AudioMedia]:
         """
         Get the audio media associated with the active call.
@@ -231,7 +236,6 @@ class Softphone:
             ):
                 return self.active_call.getAudioMedia(i)
         return None
-    
 
     def __external_incoming_buffer_loop(self) -> None:
         """
@@ -301,10 +305,7 @@ class Softphone:
 
                         # wait until done speaking or external interruption
                         time_to_wait = incoming_audio_segment.duration_seconds
-                        while (
-                            time_to_wait > 0
-                            and not self.__interrupt_audio_output
-                        ):
+                        while time_to_wait > 0 and not self.__interrupt_audio_output:
                             time.sleep(0.2)
                             time_to_wait -= 0.2
                         self.__interrupt_audio_output = False
@@ -684,15 +685,13 @@ class Softphone:
         if not call_medium:
             print("Can't say: No call media available.")
             return
-        
+
         # wait for incoming buffer to finish playing
         self.__audio_output_lock.acquire()
-        
+
         # -- Scan for cached audio file --
         message_hash = self.__get_message_hash(message)
-        cached_audio_path = os.path.join(
-            HERE / "../cache", f"{message_hash}.wav"
-        )
+        cached_audio_path = os.path.join(HERE / "../cache", f"{message_hash}.wav")
         if os.path.isfile(cached_audio_path):
             if self.__media_player_1:
                 self.__media_player_1.stopTransmit(call_medium)
@@ -787,15 +786,9 @@ class Softphone:
                                 ),
                                 "wb",
                             ) as buffer_1:
-                                buffer_1.setnchannels(
-                                    self.__config["tts_channels"]
-                                )
-                                buffer_1.setsampwidth(
-                                    self.__config["tts_sample_width"]
-                                )
-                                buffer_1.setframerate(
-                                    self.__config["tts_sample_rate"]
-                                )
+                                buffer_1.setnchannels(self.__config["tts_channels"])
+                                buffer_1.setsampwidth(self.__config["tts_sample_width"])
+                                buffer_1.setframerate(self.__config["tts_sample_rate"])
                                 buffer_1.writeframes(chunk)
                                 time.sleep(delay)
                         else:
@@ -830,15 +823,9 @@ class Softphone:
                                 ),
                                 "wb",
                             ) as buffer_0:
-                                buffer_0.setnchannels(
-                                    self.__config["tts_channels"]
-                                )
-                                buffer_0.setsampwidth(
-                                    self.__config["tts_sample_width"]
-                                )
-                                buffer_0.setframerate(
-                                    self.__config["tts_sample_rate"]
-                                )
+                                buffer_0.setnchannels(self.__config["tts_channels"])
+                                buffer_0.setsampwidth(self.__config["tts_sample_width"])
+                                buffer_0.setframerate(self.__config["tts_sample_rate"])
                                 buffer_0.writeframes(chunk)
                                 time.sleep(delay)
 
@@ -899,12 +886,11 @@ class Softphone:
 
         self.stop_audio()
 
-        
         call_medium = self.__get_call_medium()
         if not call_medium:
             print("Can't play audio: No call media available.")
             return
-        
+
         self.__media_player_1 = pj.AudioMediaPlayer()
         loop_mode = pj.PJMEDIA_FILE_LOOP if do_loop else pj.PJMEDIA_FILE_NO_LOOP
         self.__media_player_1.createPlayer(audio_file_path)
@@ -917,20 +903,25 @@ class Softphone:
         Returns:
             None
         """
-        
+
         call_medium = self.__get_call_medium()
         if not call_medium:
             print("Can't stop audio: No call media available.")
             return
-        
+
         if self.__media_player_1:
             self.__media_player_1.stopTransmit(call_medium)
             del self.__media_player_1
         if self.__media_player_2:
             self.__media_player_2.stopTransmit(call_medium)
             del self.__media_player_2
-            
-    def record_audio(self, output_path: str, vad: Optional[bool] = False, duration: Optional[float] = None) -> bool:
+
+    def record_audio(
+        self,
+        output_path: str,
+        vad: Optional[bool] = False,
+        duration: Optional[float] = None,
+    ) -> bool:
         """
         Record audio from the active call for a specified duration and save it as an artifact WAVE file.
 
@@ -945,10 +936,10 @@ class Softphone:
         if not self.active_call:
             print("Can't record audio: No call in progress.")
             return False
-        
+
         # user-called recording should always have priority over worker threads
         self.__audio_input_priority_thread = threading.current_thread()
-        
+
         if vad:
             if not self.__skip_silence():
                 self.__audio_input_priority_thread = None
@@ -957,16 +948,14 @@ class Softphone:
             if not recording_successful:
                 self.__audio_input_priority_thread = None
                 return False
-            
-            recorded_audio.export(
-                output_path, format="wav"
-            )
+
+            recorded_audio.export(output_path, format="wav")
             self.__audio_input_priority_thread = None
             return True
         elif duration:
             if not self.__record_incoming_audio(
                 output_path=output_path,
-                duration=duration,            
+                duration=duration,
             ):
                 self.__audio_input_priority_thread = None
                 return False
@@ -974,9 +963,6 @@ class Softphone:
             return True
         else:
             raise ValueError("Either vad or duration must be specified.")
-
-
-        
 
     def listen(self) -> str:
         """
@@ -1015,7 +1001,10 @@ class Softphone:
         return transcription.text
 
     def __record_incoming_audio(
-        self, output_path: str, duration: float = 1.0, unavailable_media_timeout: int = 60
+        self,
+        output_path: str,
+        duration: float = 1.0,
+        unavailable_media_timeout: int = 60,
     ) -> bool:
         """
         Record incoming audio from the active call for a specified duration and save it as an artifact WAVE file.
@@ -1029,9 +1018,12 @@ class Softphone:
             bool: True if the recording was successful, False otherwise.
         """
         # wait for priority thread to stop recording
-        while self.__audio_input_priority_thread is not None and self.__audio_input_priority_thread != threading.current_thread():
+        while (
+            self.__audio_input_priority_thread is not None
+            and self.__audio_input_priority_thread != threading.current_thread()
+        ):
             time.sleep(0.2)
-        
+
         self.__audio_input_lock.acquire()
         waited_on_media = 0
         while waited_on_media < unavailable_media_timeout:
@@ -1044,9 +1036,7 @@ class Softphone:
                     call_medium = self.active_call.getAudioMedia(i)
 
                     self.__media_recorder = pj.AudioMediaRecorder()
-                    self.__media_recorder.createRecorder(
-                        output_path
-                    )
+                    self.__media_recorder.createRecorder(output_path)
                     call_medium.startTransmit(self.__media_recorder)
                     time.sleep(duration)
 
@@ -1077,7 +1067,6 @@ class Softphone:
         self.__audio_input_lock.release()
         return False
 
-
     def __skip_silence(self) -> bool:
         """
         Wait until incoming audio stream is no longer silent.
@@ -1085,12 +1074,13 @@ class Softphone:
         Returns:
             bool: True if recording could be performed successfully, False otherwise.
         """
-        if not self.__record_incoming_audio(output_path=self.__incoming_audio_save_path, duration=self.__config["silence_sample_interval"]):
+        if not self.__record_incoming_audio(
+            output_path=self.__incoming_audio_save_path,
+            duration=self.__config["silence_sample_interval"],
+        ):
             return False
 
-        last_segment = AudioSegment.from_wav(
-            self.__incoming_audio_save_path
-        )
+        last_segment = AudioSegment.from_wav(self.__incoming_audio_save_path)
         while last_segment.dBFS < self.__config["silence_threshold"]:
 
             if not self.active_call or self.__paired_call:
@@ -1098,12 +1088,10 @@ class Softphone:
 
             if not self.__record_incoming_audio(
                 output_path=self.__incoming_audio_save_path,
-                duration=self.__config["silence_sample_interval"]
+                duration=self.__config["silence_sample_interval"],
             ):
                 return False
-            last_segment = AudioSegment.from_wav(
-                self.__incoming_audio_save_path
-            )
+            last_segment = AudioSegment.from_wav(self.__incoming_audio_save_path)
 
         return True
 
@@ -1115,10 +1103,11 @@ class Softphone:
             tuple: A tuple containing a boolean indicating if the recording was successful (bool) and the combined audio segments (AudioSegment).
         """
 
-        self.__record_incoming_audio(output_path=self.__incoming_audio_save_path, duration=self.__config["silence_sample_interval"])
-        last_segment = AudioSegment.from_wav(
-            self.__incoming_audio_save_path
+        self.__record_incoming_audio(
+            output_path=self.__incoming_audio_save_path,
+            duration=self.__config["silence_sample_interval"],
         )
+        last_segment = AudioSegment.from_wav(self.__incoming_audio_save_path)
         combined_segments = last_segment
 
         active_threshold = self.__config["silence_threshold"]
@@ -1133,12 +1122,10 @@ class Softphone:
 
             if not self.__record_incoming_audio(
                 output_path=self.__incoming_audio_save_path,
-                duration=self.__config["speaking_sample_interval"]
+                duration=self.__config["speaking_sample_interval"],
             ):
                 return False, None
-            last_segment = AudioSegment.from_wav(
-                self.__incoming_audio_save_path
-            )
+            last_segment = AudioSegment.from_wav(self.__incoming_audio_save_path)
             combined_segments += last_segment
 
         return True, combined_segments
