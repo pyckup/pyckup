@@ -1033,42 +1033,50 @@ class Softphone:
             time.sleep(0.2)
         
         self.__audio_input_lock.acquire()
-        waited_on_medium = 0
-        while waited_on_medium < unavailable_media_timeout:
-            call_medium = self.__get_call_medium()
-            if call_medium:
-                self.__media_recorder = pj.AudioMediaRecorder()
-                self.__media_recorder.createRecorder(
-                    output_path
-                )
-                call_medium.startTransmit(self.__media_recorder)
-                time.sleep(duration)
+        waited_on_media = 0
+        while waited_on_media < unavailable_media_timeout:
+            call_info = self.active_call.getInfo()
+            for i in range(len(call_info.media)):
+                if (
+                    call_info.media[i].type == pj.PJMEDIA_TYPE_AUDIO
+                    and call_info.media[i].status == pj.PJSUA_CALL_MEDIA_ACTIVE
+                ):
+                    call_medium = self.active_call.getAudioMedia(i)
 
-                # call was terminated while recording.
-                if not self.__media_recorder or not self.active_call:
-                    self.__audio_input_lock.release()
-                    return False
+                    self.__media_recorder = pj.AudioMediaRecorder()
+                    self.__media_recorder.createRecorder(
+                        output_path
+                    )
+                    call_medium.startTransmit(self.__media_recorder)
+                    time.sleep(duration)
 
-                # call media no longer active. probably holding. Wait for media.
-                if not call_medium.status == pj.PJSUA_CALL_MEDIA_ACTIVE:
+                    # call was terminated while recording.
+                    if not self.__media_recorder or not self.active_call:
+                        self.__audio_input_lock.release()
+                        return False
+
+                    # call media no longer active. probably holding. Wait for media.
+                    call_info = self.active_call.getInfo()
+                    if not call_info.media[i].status == pj.PJSUA_CALL_MEDIA_ACTIVE:
+                        call_medium.stopTransmit(self.__media_recorder)
+                        time.sleep(1)
+                        waited_on_media += 1
+                        continue
+
+                    # recorded successfully
                     call_medium.stopTransmit(self.__media_recorder)
-                    time.sleep(1)
-                    waited_on_medium += 1
-                    continue
+                    del self.__media_recorder
+                    self.__audio_input_lock.release()
+                    return True
 
-                # recorded successfully
-                call_medium.stopTransmit(self.__media_recorder)
-                del self.__media_recorder
-                self.__audio_input_lock.release()
-                return True
-            else:
-                # no available call media. probably holding. Wait for media.
-                time.sleep(1)
-                waited_on_medium += 1
-                continue
+            # no available call media. probably holding. Wait for media.
+            time.sleep(1)
+            waited_on_media += 1
+            continue
 
         self.__audio_input_lock.release()
         return False
+
 
     def __skip_silence(self) -> bool:
         """
