@@ -939,18 +939,28 @@ class Softphone:
 
         # user-called recording should always have priority over worker threads
         self.__audio_input_priority_thread = threading.current_thread()
-
+        
+         # no AI audio should be played during recording
+        while not self.__external_incoming_buffer.empty():
+            time.sleep(0.2)
+        self.__audio_output_lock.acquire()
         if vad:
             if not self.__skip_silence():
                 self.__audio_input_priority_thread = None
+                if self.__audio_output_lock.locked():
+                    self.__audio_output_lock.release()
                 return False
             recording_successful, recorded_audio = self.__record_while_not_silent()
             if not recording_successful:
                 self.__audio_input_priority_thread = None
+                if self.__audio_output_lock.locked():
+                    self.__audio_output_lock.release()
                 return False
 
             recorded_audio.export(output_path, format="wav")
             self.__audio_input_priority_thread = None
+            if self.__audio_output_lock.locked():
+                    self.__audio_output_lock.release()
             return True
         elif duration:
             if not self.__record_incoming_audio(
@@ -958,8 +968,12 @@ class Softphone:
                 duration=duration,
             ):
                 self.__audio_input_priority_thread = None
+                if self.__audio_output_lock.locked():
+                    self.__audio_output_lock.release()
                 return False
             self.__audio_input_priority_thread = None
+            if self.__audio_output_lock.locked():
+                    self.__audio_output_lock.release()
             return True
         else:
             raise ValueError("Either vad or duration must be specified.")
