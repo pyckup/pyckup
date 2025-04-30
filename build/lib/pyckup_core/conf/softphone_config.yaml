@@ -1,0 +1,7 @@
+tts_chunk_size: !!int 16384
+tts_sample_rate: !!int 24000
+tts_sample_width: !!int 2
+tts_channels: !!int 1
+silence_threshold: !!int -40
+silence_sample_interval: !!float 0.5
+speaking_sample_interval: !!float 1.0

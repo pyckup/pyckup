@@ -594,21 +594,16 @@ class LLMExtractor:
         if not self.__repeat_item:
             return
 
-        if self.__realtime:
-            self.__conversation_items.insert(0, self.__current_item)
-            self.__conversation_items.insert(0, self.__repeat_item)
-            self.__repeat_item = None
-        else:
-            # inform user that we need a piece of info again
-            repeat_prompt_item = {
-                "type": "prompt",
-                "prompt": "Say (in the current language) that you need to ask again for an information. It doesnt matter if the info is already in the conversation.",
-                "interactive": True,
-            }
-            self.__conversation_items.insert(0, self.__current_item)
-            self.__conversation_items.insert(0, self.__repeat_item)
-            self.__current_item = repeat_prompt_item
-            self.__repeat_item = None
+        # inform user that we need a piece of info again
+        repeat_prompt_item = {
+            "type": "prompt",
+            "prompt": "Say (in the current language) that you need to ask again for an information. It doesnt matter if the info is already in the conversation.",
+            "interactive": True,
+        }
+        self.__conversation_items.insert(0, self.__current_item)
+        self.__conversation_items.insert(0, self.__repeat_item)
+        self.__current_item = repeat_prompt_item
+        self.__repeat_item = None
 
     def __get_conversation_state_lock(self) -> bool:
         """
@@ -945,13 +940,9 @@ class LLMExtractor:
 
             assert isinstance(self.__current_item, ChoiceItemBase)
 
-            new_items = self.__current_item.get_items_for_choice(
+            self.__conversation_items = self.__current_item.get_items_for_choice(
                 selected_choice
             )
-            if not new_items:
-                self.__conversation_items = [self.__current_item]
-                return [], [], False
-            self.__conversation_items = new_items
 
             responses = [("Realtime Conversation", "choice")]
             requires_interaction = False
