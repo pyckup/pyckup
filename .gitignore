@@ -7,4 +7,5 @@ logs
 pyckup.db
 cache
 pyckup.egg-info
+pyckup_lib.egg-info
 dist
