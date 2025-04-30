@@ -5,7 +5,7 @@ with open("requirements.txt") as f:
 
 setup(
     name="pyckup-lib",
-    version="1.0.4",
+    version="1.0.5",
     packages=find_packages(),
     install_requires=requirements,
     package_data={"pyckup": ["resources/*", "conf/*"]},
