@@ -38,7 +38,10 @@ class ChoiceItemBase(ConversationItem):
         Returns:
             list: The conversation items for the selected choice.
         """
-        return [option for option in self.options if option.option == choice][0].items
+        selected_options = [option for option in self.options if option.option == choice]
+        if not selected_options:
+            return []
+        return selected_options[0].items
 
     def get_all_options(self) -> List[str]:
         """
