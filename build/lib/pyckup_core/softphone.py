@@ -136,9 +136,6 @@ class Softphone:
         self.__group.add_phone(self)
 
         self.__id = uuid.uuid4()
-        self.__incoming_audio_save_path = str(
-            HERE / f"../artifacts/{self.__id}_incoming.wav"
-        )
         self.active_call = None
         self.__paired_call = None
 
@@ -236,6 +233,9 @@ class Softphone:
             ):
                 return self.active_call.getAudioMedia(i)
         return None
+    
+    def __get_incoming_audio_path(self) -> str:
+        return str(HERE / f"../artifacts/{self.__id}_{threading.get_ident()}_incoming.wav")
 
     def __external_incoming_buffer_loop(self) -> None:
         """
@@ -259,9 +259,9 @@ class Softphone:
                 ):  # ensure that still incoming packages are caught as part of the same response
                     incoming_audio_chunks = []
 
-                    # wait it bit to catch more backages -> reduces stuttering (but slightly increases response time)
+                    # wait a bit to catch more packages -> reduces stuttering (but slightly increases response time)
                     if not iteration_has_played_audio:
-                        time.sleep(0.2)
+                        time.sleep(0.3)
                         iteration_has_played_audio = True
 
                     # empty queue completely
@@ -337,18 +337,16 @@ class Softphone:
             )
 
             while self.has_picked_up_call():
-                self.__skip_silence()
 
-                if not self.has_picked_up_call():
-                    return
+                recording_successful = self.__record_incoming_audio(output_path=self.__get_incoming_audio_path(), duration=0.3)
 
-                self.__interrupt_audio_output = True
-
-                _, outgoing_audio_segment = self.__record_while_not_silent()
-
-                if not self.has_picked_up_call():
-                    return
-
+                if not recording_successful:
+                    time.sleep(0.2)
+                    continue
+                
+                outgoing_audio_segment = AudioSegment.from_wav(
+                    self.__get_incoming_audio_path()
+                )
                 outgoing_audio_segment = (
                     outgoing_audio_segment.set_frame_rate(24000)
                     .set_channels(1)
@@ -1089,23 +1087,23 @@ class Softphone:
             bool: True if recording could be performed successfully, False otherwise.
         """
         if not self.__record_incoming_audio(
-            output_path=self.__incoming_audio_save_path,
+            output_path=self.__get_incoming_audio_path(),
             duration=self.__config["silence_sample_interval"],
         ):
             return False
 
-        last_segment = AudioSegment.from_wav(self.__incoming_audio_save_path)
+        last_segment = AudioSegment.from_wav(self.__get_incoming_audio_path())
         while last_segment.dBFS < self.__config["silence_threshold"]:
 
             if not self.active_call or self.__paired_call:
                 return ""
 
             if not self.__record_incoming_audio(
-                output_path=self.__incoming_audio_save_path,
+                output_path=self.__get_incoming_audio_path(),
                 duration=self.__config["silence_sample_interval"],
             ):
                 return False
-            last_segment = AudioSegment.from_wav(self.__incoming_audio_save_path)
+            last_segment = AudioSegment.from_wav(self.__get_incoming_audio_path())
 
         return True
 
@@ -1118,10 +1116,10 @@ class Softphone:
         """
 
         self.__record_incoming_audio(
-            output_path=self.__incoming_audio_save_path,
+            output_path=self.__get_incoming_audio_path(),
             duration=self.__config["silence_sample_interval"],
         )
-        last_segment = AudioSegment.from_wav(self.__incoming_audio_save_path)
+        last_segment = AudioSegment.from_wav(self.__get_incoming_audio_path())
         combined_segments = last_segment
 
         active_threshold = self.__config["silence_threshold"]
@@ -1135,11 +1133,11 @@ class Softphone:
                 return True, ""
 
             if not self.__record_incoming_audio(
-                output_path=self.__incoming_audio_save_path,
+                output_path=self.__get_incoming_audio_path(),
                 duration=self.__config["speaking_sample_interval"],
             ):
                 return False, None
-            last_segment = AudioSegment.from_wav(self.__incoming_audio_save_path)
+            last_segment = AudioSegment.from_wav(self.__get_incoming_audio_path())
             combined_segments += last_segment
 
         return True, combined_segments
