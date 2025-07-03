@@ -259,9 +259,9 @@ class Softphone:
                 ):  # ensure that still incoming packages are caught as part of the same response
                     incoming_audio_chunks = []
 
-                    # wait it bit to catch more backages -> reduces stuttering (but slightly increases response time)
+                    # wait a bit to catch more packages -> reduces stuttering (but slightly increases response time)
                     if not iteration_has_played_audio:
-                        time.sleep(0.2)
+                        time.sleep(0.3)
                         iteration_has_played_audio = True
 
                     # empty queue completely
@@ -337,18 +337,16 @@ class Softphone:
             )
 
             while self.has_picked_up_call():
-                self.__skip_silence()
 
-                if not self.has_picked_up_call():
-                    return
+                recording_successful = self.__record_incoming_audio(output_path=self.__get_incoming_audio_path(), duration=0.3)
 
-                self.__interrupt_audio_output = True
-
-                _, outgoing_audio_segment = self.__record_while_not_silent()
-
-                if not self.has_picked_up_call():
-                    return
-
+                if not recording_successful:
+                    time.sleep(0.2)
+                    continue
+                
+                outgoing_audio_segment = AudioSegment.from_wav(
+                    self.__get_incoming_audio_path()
+                )
                 outgoing_audio_segment = (
                     outgoing_audio_segment.set_frame_rate(24000)
                     .set_channels(1)

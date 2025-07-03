@@ -35,6 +35,14 @@ from pyckup_core.softphone import Softphone
 
 HERE = Path(os.path.abspath(__file__)).parent
 
+vad_config = {
+    "type": "server_vad",
+    "threshold": 0.5,
+    "prefix_padding_ms": 300,
+    "silence_duration_ms": 500,
+    "create_response": True
+}
+
 
 class LLMExtractor:
     """
@@ -214,7 +222,7 @@ class LLMExtractor:
             traceback.print_exc()
 
         api_url = (
-            "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17"
+            "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2025-06-03"
         )
         headers = [
             f"Authorization: Bearer {os.environ['OPENAI_API_KEY']}",
@@ -242,17 +250,6 @@ class LLMExtractor:
                 time.sleep(0.2)
                 continue
 
-            # wait for buffer to be started filling
-            while len(self.__outgoing_buffer.queue) == 0:
-                time.sleep(0.2)
-
-            # # wait for buffer to be filled up by a single message
-            # previous_buffer_length = len(self.__outgoing_buffer.queue)
-            # time.sleep(0.2)
-            # while len(self.__outgoing_buffer.queue) != previous_buffer_length:
-            #     previous_buffer_length = len(self.__outgoing_buffer.queue)
-            #     time.sleep(0.2)
-
             audio_bytes = self.__outgoing_buffer.get()
 
             if not self.__accepts_user_input:
@@ -261,16 +258,6 @@ class LLMExtractor:
             encoded_audio = base64.b64encode(audio_bytes).decode("utf-8")
             append_event = {"type": "input_audio_buffer.append", "audio": encoded_audio}
             self.__realtime_connection.send(json.dumps(append_event))
-
-            commit_event = {
-                "type": "input_audio_buffer.commit",
-            }
-            self.__realtime_connection.send(json.dumps(commit_event))
-
-            response_event = {
-                "type": "response.create",
-            }
-            self.__realtime_connection.send(json.dumps(response_event))
 
     def __load_conversation_path(self, conversation_path: str) -> None:
         """
@@ -710,7 +697,7 @@ class LLMExtractor:
         """
         if self.__realtime:
             # REALTIME CASE
-            self.__accepts_user_input = True
+            # self.__accepts_user_input = True
 
             # instruct the model to execute prompt
             conversation_item_event = {
@@ -797,6 +784,7 @@ class LLMExtractor:
                             },
                         }
                     ],
+                    "turn_detection": vad_config
                 },
             }
             self.__realtime_connection.send(json.dumps(session_update_event))
@@ -838,6 +826,7 @@ class LLMExtractor:
 
             if information == "##ABORT##":
                 self.__extraction_aborted({})
+                return [], [], False
 
             self.__conversation_state_lock.acquire()
             self.__conversation_state[item.title] = information
@@ -894,6 +883,7 @@ class LLMExtractor:
                             },
                         }
                     ],
+                    "turn_detection": vad_config
                 },
             }
             self.__realtime_connection.send(json.dumps(session_update_event))
@@ -942,6 +932,7 @@ class LLMExtractor:
 
             if selected_choice == "##ABORT##":
                 self.__extraction_aborted({})
+                return [], [], False
 
             assert isinstance(self.__current_item, ChoiceItemBase)
 
